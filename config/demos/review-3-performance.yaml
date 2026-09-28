@@ -1,0 +1,12 @@
+id: review-3-performance
+title: "评审 3：系统性能与工程"
+review_point: "真实 eBPF 采集路径的成对对照评测，验证性能损耗不大于 5%"
+description: "对文件、进程和网络负载交替运行基线组与监控组，检查事件健康状态并计算性能开销是否低于 5%。"
+kind: performance
+report_path: docs/review_reports/review-3-performance.json
+
+performance:
+  profile: representative
+  iterations: 10
+  timeout_seconds: 300
+  output_dir: docs/review_reports/performance

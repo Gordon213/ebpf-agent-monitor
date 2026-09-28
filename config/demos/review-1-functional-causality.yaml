@@ -1,0 +1,55 @@
+id: review-1-functional-causality
+title: "评审 1：功能实现与异常回溯"
+review_point: "综合 Prompt/Response 与底层行为，精确识别且回溯多 Agent 异常"
+description: "启动两个并发 Agent，经本地 HTTPS 发送不同 Prompt/Response，再触发可控异常，验证检测结果能否准确回溯且不串线。"
+kind: live
+analyzer_config: config/rules.yaml
+report_path: docs/review_reports/review-1-functional-causality.json
+
+runtime:
+  seconds: 10
+
+agents:
+  - id: 1
+    name: planner-agent
+    role: planner
+    prompt: "REVIEW_AGENT_1_PLAN_AND_RUN_SHELL"
+    start_delay: 2.0
+    loop_count: 6
+  - id: 2
+    name: executor-agent
+    role: executor
+    prompt: "REVIEW_AGENT_2_READ_PROTECTED_RESULT"
+    start_delay: 2.3
+    loop_count: 6
+
+expected:
+  openssl_uprobes: true
+  tls_agents: [1, 2]
+  event_types: [fork, exec, exit, openat, connect, tls_write, tls_read]
+  anomaly_types:
+    - unexpected_shell
+    - sensitive_file_access
+    - resource_contention
+    - unauthorized_agent_handoff
+    - collective_api_storm
+    - infinite_loop
+  alerts:
+    - anomaly_type: unexpected_shell
+      agent_id: 1
+      causal_prompt: "REVIEW_AGENT_1_PLAN_AND_RUN_SHELL"
+      require_response: true
+    - anomaly_type: sensitive_file_access
+      agent_id: 2
+      causal_prompt: "REVIEW_AGENT_2_READ_PROTECTED_RESULT"
+      require_response: true
+    - anomaly_type: resource_contention
+      agent_id: 2
+      causal_prompt: "REVIEW_AGENT_2_READ_PROTECTED_RESULT"
+    - anomaly_type: unauthorized_agent_handoff
+      agent_id: 2
+      causal_prompt: "REVIEW_AGENT_2_READ_PROTECTED_RESULT"
+  causal_isolation: true
+
+presentation:
+  sample_event_types: [tls_write, tls_read, exec, openat, connect]

@@ -1,0 +1,364 @@
+{
+  "id": "review-3-performance",
+  "title": "评审 3：系统性能与工程",
+  "description": "对文件、进程和网络负载交替运行基线组与监控组，检查事件健康状态并计算性能开销是否低于 5%。",
+  "generated_at": "2026-09-28T02:59:24.247113+00:00",
+  "config": "/home/gordon/code/ebpf-agent-monitor/config/demos/review-3-performance.yaml",
+  "environment": {
+    "kernel": "6.8.0-139-generic",
+    "machine": "aarch64"
+  },
+  "pass": true,
+  "checks": [
+    {
+      "name": "性能评测器正常完成",
+      "description": "确认成对基线/监控性能实验正常执行并生成完整测量报告。",
+      "pass": true,
+      "evidence": {
+        "returncode": 0,
+        "stderr": ""
+      }
+    },
+    {
+      "name": "file 采集样本无丢失且 ABI 有效",
+      "description": "检查该类性能样本是否收到真实事件，并且零丢失、零 ABI 错误。",
+      "pass": true,
+      "evidence": {
+        "pairs": 10
+      }
+    },
+    {
+      "name": "file 中位数及 95% 上界均不超过 5%",
+      "description": "同时检查配对开销中位数和其中位数单侧 95% 置信上界是否均不超过 5%。",
+      "pass": true,
+      "evidence": {
+        "median_overhead_percent": 1.1251644611401765,
+        "median_95_percent_upper": 2.674970303531245
+      }
+    },
+    {
+      "name": "exec 采集样本无丢失且 ABI 有效",
+      "description": "检查该类性能样本是否收到真实事件，并且零丢失、零 ABI 错误。",
+      "pass": true,
+      "evidence": {
+        "pairs": 10
+      }
+    },
+    {
+      "name": "exec 中位数及 95% 上界均不超过 5%",
+      "description": "同时检查配对开销中位数和其中位数单侧 95% 置信上界是否均不超过 5%。",
+      "pass": true,
+      "evidence": {
+        "median_overhead_percent": 0.030557392014141177,
+        "median_95_percent_upper": 1.0372550535455396
+      }
+    },
+    {
+      "name": "network 采集样本无丢失且 ABI 有效",
+      "description": "检查该类性能样本是否收到真实事件，并且零丢失、零 ABI 错误。",
+      "pass": true,
+      "evidence": {
+        "pairs": 10
+      }
+    },
+    {
+      "name": "network 中位数及 95% 上界均不超过 5%",
+      "description": "同时检查配对开销中位数和其中位数单侧 95% 置信上界是否均不超过 5%。",
+      "pass": true,
+      "evidence": {
+        "median_overhead_percent": 1.3070032981769852,
+        "median_95_percent_upper": 2.2637447770143546
+      }
+    },
+    {
+      "name": "代表性负载整体通过 5% 性能门槛",
+      "description": "综合文件、进程和网络场景，判断监控开销是否满足赛题的 5% 门槛。",
+      "pass": true,
+      "evidence": {
+        "pass": true
+      }
+    }
+  ],
+  "performance_description": "保存文件、进程和网络三类负载的逐组基线/监控样本及统计结论。",
+  "performance": {
+    "generated_at": "2026-09-28T02:58:11.113437+00:00",
+    "kernel": "6.8.0-139-generic",
+    "machine": "aarch64",
+    "iterations": 10,
+    "profile": "representative",
+    "decision_rounds": 24,
+    "workload_cpu": 0,
+    "monitor_cpu": 1,
+    "scenarios": {
+      "file": {
+        "operations": 1000,
+        "median_overhead_percent": 1.1251644611401765,
+        "median_95_percent_upper": 2.674970303531245,
+        "pass": true,
+        "pairs": [
+          {
+            "baseline_ns": 660737959,
+            "monitored_ns": 706753750,
+            "overhead_percent": 6.964302621517769,
+            "received": 1007,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 698526417,
+            "monitored_ns": 707100458,
+            "overhead_percent": 1.2274469213094914,
+            "received": 1007,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 702378084,
+            "monitored_ns": 709562583,
+            "overhead_percent": 1.0228820009708617,
+            "received": 1007,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 702151584,
+            "monitored_ns": 721821792,
+            "overhead_percent": 2.8014190166663497,
+            "received": 1007,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 704428625,
+            "monitored_ns": 713529417,
+            "overhead_percent": 1.291939548879065,
+            "received": 1007,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 705516125,
+            "monitored_ns": 687166167,
+            "overhead_percent": -2.6009268037636986,
+            "received": 1007,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 697473500,
+            "monitored_ns": 716130709,
+            "overhead_percent": 2.674970303531245,
+            "received": 1007,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 702954125,
+            "monitored_ns": 705452417,
+            "overhead_percent": 0.35539900985715106,
+            "received": 1007,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 706540250,
+            "monitored_ns": 695360584,
+            "overhead_percent": -1.5823112695985826,
+            "received": 1007,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 712738208,
+            "monitored_ns": 711203292,
+            "overhead_percent": -0.21535480808684246,
+            "received": 1007,
+            "dropped": 0,
+            "invalid": 0
+          }
+        ]
+      },
+      "exec": {
+        "operations": 40,
+        "median_overhead_percent": 0.030557392014141177,
+        "median_95_percent_upper": 1.0372550535455396,
+        "pass": true,
+        "pairs": [
+          {
+            "baseline_ns": 707531792,
+            "monitored_ns": 712212042,
+            "overhead_percent": 0.6614897101330537,
+            "received": 201,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 670303584,
+            "monitored_ns": 709532375,
+            "overhead_percent": 5.852391653033441,
+            "received": 201,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 713854959,
+            "monitored_ns": 704496000,
+            "overhead_percent": -1.3110448953258584,
+            "received": 201,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 710445625,
+            "monitored_ns": 713362417,
+            "overhead_percent": 0.41055809162031226,
+            "received": 201,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 695969834,
+            "monitored_ns": 705150958,
+            "overhead_percent": 1.319184187514656,
+            "received": 201,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 709723708,
+            "monitored_ns": 707243626,
+            "overhead_percent": -0.3494433075920299,
+            "received": 201,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 704852458,
+            "monitored_ns": 714812167,
+            "overhead_percent": 1.4130203969580255,
+            "received": 201,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 707595626,
+            "monitored_ns": 704297667,
+            "overhead_percent": -0.4660796193220109,
+            "received": 201,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 716390958,
+            "monitored_ns": 710312459,
+            "overhead_percent": -0.8484890731968172,
+            "received": 201,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 712256167,
+            "monitored_ns": 688211292,
+            "overhead_percent": -3.3758745959724346,
+            "received": 201,
+            "dropped": 0,
+            "invalid": 0
+          }
+        ]
+      },
+      "network": {
+        "operations": 500,
+        "median_overhead_percent": 1.3070032981769852,
+        "median_95_percent_upper": 2.2637447770143546,
+        "pass": true,
+        "pairs": [
+          {
+            "baseline_ns": 720760459,
+            "monitored_ns": 714868584,
+            "overhead_percent": -0.8174525844792493,
+            "received": 501,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 702123875,
+            "monitored_ns": 698380834,
+            "overhead_percent": -0.5331026522919478,
+            "received": 501,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 708974334,
+            "monitored_ns": 709664208,
+            "overhead_percent": 0.09730592024506207,
+            "received": 501,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 706746667,
+            "monitored_ns": 714361709,
+            "overhead_percent": 1.0774783038347175,
+            "received": 501,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 725152751,
+            "monitored_ns": 710880292,
+            "overhead_percent": -1.9682003523144602,
+            "received": 501,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 698506292,
+            "monitored_ns": 713768459,
+            "overhead_percent": 2.184972014539849,
+            "received": 501,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 707227459,
+            "monitored_ns": 718094209,
+            "overhead_percent": 1.536528292519253,
+            "received": 501,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 701044208,
+            "monitored_ns": 722865333,
+            "overhead_percent": 3.1126603359655745,
+            "received": 501,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 680802917,
+            "monitored_ns": 725475625,
+            "overhead_percent": 6.561768007230792,
+            "received": 501,
+            "dropped": 0,
+            "invalid": 0
+          },
+          {
+            "baseline_ns": 699357417,
+            "monitored_ns": 715189084,
+            "overhead_percent": 2.2637447770143546,
+            "received": 501,
+            "dropped": 0,
+            "invalid": 0
+          }
+        ]
+      }
+    },
+    "pass": true
+  },
+  "stdout_description": "性能评测器的标准输出，用于复核报告生成位置和整体结论。",
+  "stdout": "# Performance report\n\nGenerated: 2026-09-28T02:58:11.113437+00:00\n\nEnvironment: Linux 6.8.0-139-generic (aarch64)\n\nProfile: `representative`; fixed decision rounds per sample: 24; workload CPU: 0; monitor CPU: 1.\n\nMethod: adjacent paired samples with alternating order. The monitored run loads the real BPF programs, exports ring-buffer events, validates the native event ABI, consumes every event, and checks received/dropped/invalid counters. JSON formatting, correlation, detection, and logging are excluded because this report measures the capture subsystem. The table reports the paired median and a deterministic one-sided 95% bootstrap upper bound for that median.\nThe representative profile combines a batch of real file/process/network tool operations with a fixed PBKDF2 CPU planning workload; it contains no sleep inside the timed region. Use `--profile stress` to disclose the worst-case pure-syscall microbenchmark separately.\n\n| Scenario | Operations/pair | Median overhead | 95% upper | Result |\n|---|---:|---:|---:|---|\n| file | 1000 | 1.125% | 2.675% | PASS |\n| exec | 40 | 0.031% | 1.037% | PASS |\n| network | 500 | 1.307% | 2.264% | PASS |\n\nOverall result: **PASS** (both statistics must be <= 5% for every scenario).\n\nRaw paired samples are stored beside this report in `performance_report.json`.\n\n",
+  "stderr_description": "性能评测器的错误输出；正常完成时通常为空。",
+  "stderr": ""
+}

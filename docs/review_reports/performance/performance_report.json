@@ -1,0 +1,277 @@
+{
+  "generated_at": "2026-09-28T02:58:11.113437+00:00",
+  "kernel": "6.8.0-139-generic",
+  "machine": "aarch64",
+  "iterations": 10,
+  "profile": "representative",
+  "decision_rounds": 24,
+  "workload_cpu": 0,
+  "monitor_cpu": 1,
+  "scenarios": {
+    "file": {
+      "operations": 1000,
+      "median_overhead_percent": 1.1251644611401765,
+      "median_95_percent_upper": 2.674970303531245,
+      "pass": true,
+      "pairs": [
+        {
+          "baseline_ns": 660737959,
+          "monitored_ns": 706753750,
+          "overhead_percent": 6.964302621517769,
+          "received": 1007,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 698526417,
+          "monitored_ns": 707100458,
+          "overhead_percent": 1.2274469213094914,
+          "received": 1007,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 702378084,
+          "monitored_ns": 709562583,
+          "overhead_percent": 1.0228820009708617,
+          "received": 1007,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 702151584,
+          "monitored_ns": 721821792,
+          "overhead_percent": 2.8014190166663497,
+          "received": 1007,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 704428625,
+          "monitored_ns": 713529417,
+          "overhead_percent": 1.291939548879065,
+          "received": 1007,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 705516125,
+          "monitored_ns": 687166167,
+          "overhead_percent": -2.6009268037636986,
+          "received": 1007,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 697473500,
+          "monitored_ns": 716130709,
+          "overhead_percent": 2.674970303531245,
+          "received": 1007,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 702954125,
+          "monitored_ns": 705452417,
+          "overhead_percent": 0.35539900985715106,
+          "received": 1007,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 706540250,
+          "monitored_ns": 695360584,
+          "overhead_percent": -1.5823112695985826,
+          "received": 1007,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 712738208,
+          "monitored_ns": 711203292,
+          "overhead_percent": -0.21535480808684246,
+          "received": 1007,
+          "dropped": 0,
+          "invalid": 0
+        }
+      ]
+    },
+    "exec": {
+      "operations": 40,
+      "median_overhead_percent": 0.030557392014141177,
+      "median_95_percent_upper": 1.0372550535455396,
+      "pass": true,
+      "pairs": [
+        {
+          "baseline_ns": 707531792,
+          "monitored_ns": 712212042,
+          "overhead_percent": 0.6614897101330537,
+          "received": 201,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 670303584,
+          "monitored_ns": 709532375,
+          "overhead_percent": 5.852391653033441,
+          "received": 201,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 713854959,
+          "monitored_ns": 704496000,
+          "overhead_percent": -1.3110448953258584,
+          "received": 201,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 710445625,
+          "monitored_ns": 713362417,
+          "overhead_percent": 0.41055809162031226,
+          "received": 201,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 695969834,
+          "monitored_ns": 705150958,
+          "overhead_percent": 1.319184187514656,
+          "received": 201,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 709723708,
+          "monitored_ns": 707243626,
+          "overhead_percent": -0.3494433075920299,
+          "received": 201,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 704852458,
+          "monitored_ns": 714812167,
+          "overhead_percent": 1.4130203969580255,
+          "received": 201,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 707595626,
+          "monitored_ns": 704297667,
+          "overhead_percent": -0.4660796193220109,
+          "received": 201,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 716390958,
+          "monitored_ns": 710312459,
+          "overhead_percent": -0.8484890731968172,
+          "received": 201,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 712256167,
+          "monitored_ns": 688211292,
+          "overhead_percent": -3.3758745959724346,
+          "received": 201,
+          "dropped": 0,
+          "invalid": 0
+        }
+      ]
+    },
+    "network": {
+      "operations": 500,
+      "median_overhead_percent": 1.3070032981769852,
+      "median_95_percent_upper": 2.2637447770143546,
+      "pass": true,
+      "pairs": [
+        {
+          "baseline_ns": 720760459,
+          "monitored_ns": 714868584,
+          "overhead_percent": -0.8174525844792493,
+          "received": 501,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 702123875,
+          "monitored_ns": 698380834,
+          "overhead_percent": -0.5331026522919478,
+          "received": 501,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 708974334,
+          "monitored_ns": 709664208,
+          "overhead_percent": 0.09730592024506207,
+          "received": 501,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 706746667,
+          "monitored_ns": 714361709,
+          "overhead_percent": 1.0774783038347175,
+          "received": 501,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 725152751,
+          "monitored_ns": 710880292,
+          "overhead_percent": -1.9682003523144602,
+          "received": 501,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 698506292,
+          "monitored_ns": 713768459,
+          "overhead_percent": 2.184972014539849,
+          "received": 501,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 707227459,
+          "monitored_ns": 718094209,
+          "overhead_percent": 1.536528292519253,
+          "received": 501,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 701044208,
+          "monitored_ns": 722865333,
+          "overhead_percent": 3.1126603359655745,
+          "received": 501,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 680802917,
+          "monitored_ns": 725475625,
+          "overhead_percent": 6.561768007230792,
+          "received": 501,
+          "dropped": 0,
+          "invalid": 0
+        },
+        {
+          "baseline_ns": 699357417,
+          "monitored_ns": 715189084,
+          "overhead_percent": 2.2637447770143546,
+          "received": 501,
+          "dropped": 0,
+          "invalid": 0
+        }
+      ]
+    }
+  },
+  "pass": true
+}

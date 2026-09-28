@@ -1,0 +1,460 @@
+{
+  "id": "review-2-observability",
+  "title": "评审 2：观测深度与兼容性",
+  "description": "启动两个并发 Agent，展示进程树、文件、网络和 HTTPS 明文事件的完整字段，并验证子进程身份继承与非侵入性。",
+  "generated_at": "2026-09-28T02:58:11.094802+00:00",
+  "config": "/home/gordon/code/ebpf-agent-monitor/config/demos/review-2-observability.yaml",
+  "environment": {
+    "kernel": "6.8.0-139-generic",
+    "machine": "aarch64"
+  },
+  "pass": true,
+  "checks": [
+    {
+      "name": "所有进程正常完成",
+      "description": "确认两个 Agent、本地 HTTPS 服务、eBPF 采集器和分析器均按预期结束。",
+      "pass": true,
+      "evidence": {
+        "agents_ok": true,
+        "server": 0,
+        "collector": 124,
+        "analyzer": 0
+      }
+    },
+    {
+      "name": "目标 Agent 源文件未被监控器修改",
+      "description": "比较运行前后的 SHA-256，验证监控过程没有修改 Agent 程序。",
+      "pass": true,
+      "evidence": {
+        "sha256_unchanged": true
+      }
+    },
+    {
+      "name": "事件管道无解析错误",
+      "description": "确认采集器输出的每一行 JSON 都能被正确转发和解析。",
+      "pass": true,
+      "evidence": []
+    },
+    {
+      "name": "Ring Buffer 无丢失且 ABI 有效",
+      "description": "检查内核到用户态的事件是否丢失，以及事件结构是否符合共享 ABI。",
+      "pass": true,
+      "evidence": {
+        "received": 33,
+        "dropped": 0,
+        "invalid": 0
+      }
+    },
+    {
+      "name": "采集器与分析器事件数一致",
+      "description": "比较采集端和运行器收到的事件总数，确认传输管道没有漏传。",
+      "pass": true,
+      "evidence": {
+        "collector": 33,
+        "runner": 33
+      }
+    },
+    {
+      "name": "OpenSSL uprobe/uretprobe 真实挂载",
+      "description": "确认探针真实挂载到 OpenSSL 函数，而不是使用模拟的 HTTPS 数据。",
+      "pass": true,
+      "evidence": {
+        "attached": true
+      }
+    },
+    {
+      "name": "要求的内核事件类型全部可见",
+      "description": "确认进程、文件、网络和 TLS 等配置要求的事件均被实际采集。",
+      "pass": true,
+      "evidence": {
+        "required": [
+          "connect",
+          "exec",
+          "exit",
+          "fork",
+          "openat",
+          "tls_read",
+          "tls_write"
+        ],
+        "observed": {
+          "connect": 4,
+          "exec": 1,
+          "exit": 3,
+          "fork": 1,
+          "openat": 20,
+          "tls_read": 2,
+          "tls_write": 2
+        }
+      }
+    },
+    {
+      "name": "事件包含完整系统调用上下文",
+      "description": "检查事件是否带有时间、Agent、进程、用户和返回值等审计字段。",
+      "pass": true,
+      "evidence": {
+        "fields": [
+          "time",
+          "timestamp_ns",
+          "agent_id",
+          "tgid",
+          "tid",
+          "ppid",
+          "uid",
+          "gid",
+          "comm",
+          "retval"
+        ],
+        "failed_types": []
+      }
+    },
+    {
+      "name": "每个 Agent 的 HTTPS Prompt 与 Response 均被截获",
+      "description": "确认两个 Agent 都产生了 TLS 写入和读取事件，且没有漏掉任一 Agent。",
+      "pass": true,
+      "evidence": {
+        "required": [
+          1,
+          2
+        ],
+        "tls_write": [
+          1,
+          2
+        ],
+        "tls_read": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "fork 子进程继承根 Agent 的稳定身份",
+      "description": "确认子进程在 fork/exec 后仍归属于创建它的根 Agent。",
+      "pass": true,
+      "evidence": {
+        "propagated": true
+      }
+    },
+    {
+      "name": "关键真实文件路径被精确记录",
+      "description": "确认共享文件、交接文件和受保护文件的完整路径均被准确观测。",
+      "pass": true,
+      "evidence": {
+        "required": [
+          "/tmp/ebpf-agent-workspace/shared/review-contended.txt",
+          "/tmp/ebpf-agent-handoff/review-unapproved.txt",
+          "/tmp/ebpf-agent-protected/review-secret.txt"
+        ],
+        "missing": []
+      }
+    },
+    {
+      "name": "要求的异常类型全部命中",
+      "description": "将实际告警类型与配置中的预期集合比较，确认检测规则全部生效。",
+      "pass": true,
+      "evidence": {
+        "required": [
+          "resource_contention",
+          "sensitive_file_access",
+          "unauthorized_agent_handoff",
+          "unexpected_shell"
+        ],
+        "observed": {
+          "resource_contention": 1,
+          "sensitive_file_access": 1,
+          "unauthorized_agent_handoff": 1,
+          "unexpected_shell": 1
+        }
+      }
+    },
+    {
+      "name": "并发 Agent 的 Prompt 因果链不串线",
+      "description": "确认每条告警只关联同一 Agent 的 Prompt/Response，没有跨 Agent 错配。",
+      "pass": true,
+      "evidence": {
+        "causal_alerts": 4,
+        "mismatches": []
+      }
+    }
+  ],
+  "event_counts_description": "汇总本次从内核和 OpenSSL 探针实际收到的各类事件数量。",
+  "event_counts": {
+    "connect": 4,
+    "exec": 1,
+    "exit": 3,
+    "fork": 1,
+    "openat": 20,
+    "tls_read": 2,
+    "tls_write": 2
+  },
+  "alerts_description": "列出命中检测规则的异常，以及对应 Agent、系统行为和 Prompt/Response 因果上下文。",
+  "alerts": [
+    {
+      "description": "检测到 Agent 启动了配置之外的 Shell 程序。",
+      "alert_id": "9dafe450-81d7-484e-bc37-357fc337029e",
+      "time": "2026-09-28T02:58:03.489Z",
+      "timestamp_ns": 8899447124493,
+      "detected_at": "2026-09-28T02:58:03.490+00:00",
+      "anomaly_type": "unexpected_shell",
+      "severity": "high",
+      "title": "Agent launched shell /usr/bin/dash",
+      "agent_id": 1,
+      "agent_name": "planner-agent",
+      "pid": 217025,
+      "tid": 217025,
+      "ppid": 216970,
+      "uid": 1000,
+      "operation": "exec",
+      "object": "/usr/bin/dash",
+      "retval": 0,
+      "details": {
+        "executable": "/usr/bin/dash",
+        "causal_evidence": "same-agent bounded temporal correlation"
+      },
+      "causal_link_id": "ed27ba62-6c1a-5af0-bec1-238e254c0d7d",
+      "prompt_id": "fd8e4f30-0fd2-4fe9-9e35-c73b85259efb",
+      "causal_prompt": "OBSERVE_AGENT_1_PROCESS_TREE",
+      "causal_response": "ACK:OBSERVE_AGENT_1_PROCESS_TREE",
+      "causal_age_ms": 0.912
+    },
+    {
+      "description": "检测到两个 Agent 在短时间内写入同一个资源。",
+      "alert_id": "7a9038db-1368-4100-9094-18b81c986f41",
+      "time": "2026-09-28T02:58:04.079Z",
+      "timestamp_ns": 8900036581785,
+      "detected_at": "2026-09-28T02:58:04.080+00:00",
+      "anomaly_type": "resource_contention",
+      "severity": "high",
+      "title": "Agents 1 and 2 wrote the same resource",
+      "agent_id": 2,
+      "agent_name": "executor-agent",
+      "pid": 216971,
+      "tid": 216971,
+      "ppid": 216479,
+      "uid": 1000,
+      "operation": "openat",
+      "object": "/tmp/ebpf-agent-workspace/shared/review-contended.txt",
+      "retval": 3,
+      "details": {
+        "resource": "/tmp/ebpf-agent-workspace/shared/review-contended.txt",
+        "peer_agent_id": 1,
+        "peer_pid": 216970,
+        "window_seconds": 5.0,
+        "causal_evidence": "same-agent bounded temporal correlation"
+      },
+      "causal_link_id": "c183fd42-026d-547d-8fb3-06e6a602ddef",
+      "prompt_id": "38fc53d0-fad5-4eda-87c3-e84fd8101ac0",
+      "causal_prompt": "OBSERVE_AGENT_2_FILE_AND_NETWORK",
+      "causal_response": "ACK:OBSERVE_AGENT_2_FILE_AND_NETWORK",
+      "causal_age_ms": 252.837
+    },
+    {
+      "description": "检测到一个 Agent 读取了另一个 Agent 刚写入、但未获授权的交接数据。",
+      "alert_id": "2a0d286a-b522-4cf5-82d5-1e3994e29598",
+      "time": "2026-09-28T02:58:04.080Z",
+      "timestamp_ns": 8900037836035,
+      "detected_at": "2026-09-28T02:58:04.081+00:00",
+      "anomaly_type": "unauthorized_agent_handoff",
+      "severity": "critical",
+      "title": "Agent 2 read data recently written by Agent 1",
+      "agent_id": 2,
+      "agent_name": "executor-agent",
+      "pid": 216971,
+      "tid": 216971,
+      "ppid": 216479,
+      "uid": 1000,
+      "operation": "openat",
+      "object": "/tmp/ebpf-agent-handoff/review-unapproved.txt",
+      "retval": 3,
+      "details": {
+        "resource": "/tmp/ebpf-agent-handoff/review-unapproved.txt",
+        "source_agent_id": 1,
+        "source_pid": 216970,
+        "window_seconds": 5.0,
+        "evidence": "shared-file temporal relation",
+        "causal_evidence": "same-agent bounded temporal correlation"
+      },
+      "causal_link_id": "deed9bd3-f166-5d44-888a-869930a45712",
+      "prompt_id": "38fc53d0-fad5-4eda-87c3-e84fd8101ac0",
+      "causal_prompt": "OBSERVE_AGENT_2_FILE_AND_NETWORK",
+      "causal_response": "ACK:OBSERVE_AGENT_2_FILE_AND_NETWORK",
+      "causal_age_ms": 254.091
+    },
+    {
+      "description": "检测到 Agent 成功访问了规则配置的敏感路径。",
+      "alert_id": "bea2f283-4428-4df5-b075-db1373c0adf9",
+      "time": "2026-09-28T02:58:04.081Z",
+      "timestamp_ns": 8900038485451,
+      "detected_at": "2026-09-28T02:58:04.082+00:00",
+      "anomaly_type": "sensitive_file_access",
+      "severity": "high",
+      "title": "Agent accessed sensitive path /tmp/ebpf-agent-protected/review-secret.txt",
+      "agent_id": 2,
+      "agent_name": "executor-agent",
+      "pid": 216971,
+      "tid": 216971,
+      "ppid": 216479,
+      "uid": 1000,
+      "operation": "openat",
+      "object": "/tmp/ebpf-agent-protected/review-secret.txt",
+      "retval": 3,
+      "details": {
+        "matched_rule": "/tmp/ebpf-agent-protected",
+        "causal_evidence": "same-agent bounded temporal correlation"
+      },
+      "causal_link_id": "35f35704-c6da-5c61-8312-affa8420c843",
+      "prompt_id": "38fc53d0-fad5-4eda-87c3-e84fd8101ac0",
+      "causal_prompt": "OBSERVE_AGENT_2_FILE_AND_NETWORK",
+      "causal_response": "ACK:OBSERVE_AGENT_2_FILE_AND_NETWORK",
+      "causal_age_ms": 254.741
+    }
+  ],
+  "sample_events_description": "每种关键事件选取一条脱敏样例，用于展示可观测字段；这不是全部事件。",
+  "sample_events": [
+    {
+      "description": "展示根 Agent 创建子进程，以及新进程继承 Agent 身份。",
+      "time": "2026-09-28T02:58:03.489Z",
+      "type": "fork",
+      "agent_id": 1,
+      "tgid": 216970,
+      "tid": 216970,
+      "ppid": 216479,
+      "uid": 1000,
+      "comm": "python3",
+      "object": "",
+      "child_pid": 217025,
+      "destination": "",
+      "port": 0,
+      "retval": 0,
+      "data_len": 0,
+      "data_size": 0
+    },
+    {
+      "description": "展示 Agent 进程树中的程序执行行为。",
+      "time": "2026-09-28T02:58:03.489Z",
+      "type": "exec",
+      "agent_id": 1,
+      "tgid": 217025,
+      "tid": 217025,
+      "ppid": 216970,
+      "uid": 1000,
+      "comm": "sh",
+      "object": "/bin/sh",
+      "child_pid": 0,
+      "destination": "",
+      "port": 0,
+      "retval": 0,
+      "data_len": 0,
+      "data_size": 0
+    },
+    {
+      "description": "展示 Agent 或其子进程的退出行为。",
+      "time": "2026-09-28T02:58:03.490Z",
+      "type": "exit",
+      "agent_id": 1,
+      "tgid": 217025,
+      "tid": 217025,
+      "ppid": 216970,
+      "uid": 1000,
+      "comm": "sh",
+      "object": "",
+      "child_pid": 0,
+      "destination": "",
+      "port": 0,
+      "retval": 0,
+      "data_len": 0,
+      "data_size": 0
+    },
+    {
+      "description": "展示 Agent 打开的真实文件路径和系统调用返回值。",
+      "time": "2026-09-28T02:58:03.476Z",
+      "type": "openat",
+      "agent_id": 1,
+      "tgid": 216970,
+      "tid": 216970,
+      "ppid": 216479,
+      "uid": 1000,
+      "comm": "python3",
+      "object": "/usr/lib/ssl/cert.pem",
+      "child_pid": 0,
+      "destination": "",
+      "port": 0,
+      "retval": 3,
+      "data_len": 0,
+      "data_size": 0
+    },
+    {
+      "description": "展示 Agent 发起连接的目标 IP、端口和返回值。",
+      "time": "2026-09-28T02:58:03.487Z",
+      "type": "connect",
+      "agent_id": 1,
+      "tgid": 216970,
+      "tid": 216970,
+      "ppid": 216479,
+      "uid": 1000,
+      "comm": "python3",
+      "object": "",
+      "child_pid": 0,
+      "destination": "127.0.0.1",
+      "port": 45731,
+      "retval": -115,
+      "data_len": 0,
+      "data_size": 0
+    },
+    {
+      "description": "展示从 OpenSSL 写函数截获的 HTTPS 请求明文元数据。",
+      "time": "2026-09-28T02:58:03.489Z",
+      "type": "tls_write",
+      "agent_id": 1,
+      "tgid": 216970,
+      "tid": 216970,
+      "ppid": 216479,
+      "uid": 1000,
+      "comm": "python3",
+      "object": "",
+      "child_pid": 0,
+      "destination": "",
+      "port": 0,
+      "retval": 0,
+      "data_len": 197,
+      "data_size": 197
+    },
+    {
+      "description": "展示从 OpenSSL 读函数截获的 HTTPS 响应明文元数据。",
+      "time": "2026-09-28T02:58:03.489Z",
+      "type": "tls_read",
+      "agent_id": 1,
+      "tgid": 216970,
+      "tid": 216970,
+      "ppid": 216479,
+      "uid": 1000,
+      "comm": "python3",
+      "object": "",
+      "child_pid": 0,
+      "destination": "",
+      "port": 0,
+      "retval": 0,
+      "data_len": 137,
+      "data_size": 137
+    }
+  ],
+  "collector_summary_description": "采集器摘要说明探针挂载情况、Agent PID 映射及事件健康计数。",
+  "collector_summary": "warning: syscall tracepoints for unlink are unavailable; disabling them\nwarning: syscall tracepoints for rmdir are unavailable; disabling them\nattached OpenSSL plaintext probes: SSL_read\nattached OpenSSL plaintext probes: SSL_write\nattached OpenSSL plaintext probes: SSL_read_ex\nattached OpenSSL plaintext probes: SSL_write_ex\nOpenSSL plaintext capture source: /usr/lib/aarch64-linux-gnu/libssl.so.3\nmonitoring 2 root Agent(s); Ctrl-C to stop\n  Agent 1 -> root PID 216970\n  Agent 2 -> root PID 216971\ncollector stopped; received=33 dropped=0 invalid=0 fork=1 exec=1 exit=3 file=20 connect=4 tls=4\n",
+  "analyzer_summary_description": "分析器摘要说明处理的事件数、生成的告警数和语义关联数。",
+  "analyzer_summary": "analyzer stopped; events=33 alerts=4 correlations=17\n",
+  "agent_logs_description": "记录两个演示 Agent 的启动、HTTPS 响应和正常结束状态。",
+  "agent_logs": {
+    "1": {
+      "returncode": 0,
+      "stdout": "REVIEW AGENT 1 PID 216970 role=planner\nAgent 1 received ACK:OBSERVE_AGENT_1_PROCESS_TREE\nREVIEW AGENT 1 FINISHED\n",
+      "stderr": ""
+    },
+    "2": {
+      "returncode": 0,
+      "stdout": "REVIEW AGENT 2 PID 216971 role=executor\nAgent 2 received ACK:OBSERVE_AGENT_2_FILE_AND_NETWORK\nREVIEW AGENT 2 FINISHED\n",
+      "stderr": ""
+    }
+  },
+  "server_description": "记录仅在本机运行的临时 HTTPS 服务启动和结束状态。",
+  "server_stdout": "TLS SERVER READY 45731\nTLS SERVER FINISHED\n",
+  "server_stderr": ""
+}

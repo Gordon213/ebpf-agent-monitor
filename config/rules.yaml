@@ -1,0 +1,64 @@
+unexpected_shells:
+  - /bin/sh
+  - /bin/bash
+  - /bin/zsh
+  - /usr/bin/dash
+
+sensitive_paths:
+  - /etc/shadow
+  - /etc/passwd
+  - /etc/sudoers
+  - /root/.ssh
+  - /home/*/.ssh/*
+  # Harmless local decoy used by the review workloads.
+  - /tmp/ebpf-agent-protected
+
+agents:
+  1:
+    name: planner-agent
+    workspace: /tmp/ebpf-agent-workspace/agent-1
+  2:
+    name: executor-agent
+    workspace: /tmp/ebpf-agent-workspace/agent-2
+
+malicious_ips:
+  # Documentation-only address used by the safe demo.
+  - 203.0.113.66
+
+high_risk_ports:
+  - 23
+  - 4444
+  - 5555
+
+loop_detection:
+  enabled: true
+  window_seconds: 15
+  minimum_signals: 2
+  repeated_file_operations: 5
+  repeated_network_connections: 5
+  repeated_process_execs: 5
+  repeated_prompts: 3
+  cooldown_seconds: 20
+
+resource_limits:
+  window_seconds: 10
+  max_process_events: 20
+  max_deletions: 10
+  cooldown_seconds: 15
+
+multi_agent:
+  enabled: true
+  window_seconds: 5
+  cooldown_seconds: 10
+  collective_min_agents: 2
+  collective_connection_threshold: 10
+  # Pairs here may exchange data without an unauthorized handoff alert.
+  allowed_collaborations: []
+  shared_paths:
+    - /tmp/ebpf-agent-workspace/shared
+
+semantic_capture:
+  correlation_window_seconds: 30
+  max_history_per_agent: 128
+  max_buffer_bytes: 262144
+  max_text_chars: 4096

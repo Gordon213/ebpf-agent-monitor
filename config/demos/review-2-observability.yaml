@@ -1,0 +1,44 @@
+id: review-2-observability
+title: "评审 2：观测深度与兼容性"
+review_point: "非侵入式挂载 tracepoint/uprobe，获取进程树、文件、网络与 HTTPS 明文上下文"
+description: "启动两个并发 Agent，展示进程树、文件、网络和 HTTPS 明文事件的完整字段，并验证子进程身份继承与非侵入性。"
+kind: live
+analyzer_config: config/rules.yaml
+report_path: docs/review_reports/review-2-observability.json
+
+runtime:
+  seconds: 9
+
+agents:
+  - id: 1
+    name: planner-agent
+    role: planner
+    prompt: "OBSERVE_AGENT_1_PROCESS_TREE"
+    start_delay: 2.0
+    loop_count: 1
+  - id: 2
+    name: executor-agent
+    role: executor
+    prompt: "OBSERVE_AGENT_2_FILE_AND_NETWORK"
+    start_delay: 2.3
+    loop_count: 1
+
+expected:
+  openssl_uprobes: true
+  tls_agents: [1, 2]
+  process_tree_propagation: true
+  event_types: [fork, exec, exit, openat, connect, tls_write, tls_read]
+  event_fields: [time, timestamp_ns, agent_id, tgid, tid, ppid, uid, gid, comm, retval]
+  paths:
+    - /tmp/ebpf-agent-workspace/shared/review-contended.txt
+    - /tmp/ebpf-agent-handoff/review-unapproved.txt
+    - /tmp/ebpf-agent-protected/review-secret.txt
+  anomaly_types:
+    - unexpected_shell
+    - sensitive_file_access
+    - resource_contention
+    - unauthorized_agent_handoff
+  causal_isolation: true
+
+presentation:
+  sample_event_types: [fork, exec, exit, openat, connect, tls_write, tls_read]
