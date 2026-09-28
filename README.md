@@ -91,6 +91,37 @@ make demo-review-all
 和分析器，最后直接打印 `PASS/FAIL` 与人类可读证据。完整机器可读结果保存在
 `docs/review_reports/`。演示全程只访问本机 `127.0.0.1` 和 `/tmp` 下的无害文件。
 
+## 如何监测
+
+监测台读取 `docs/review_reports/` 里最近一次评审结果，不重新加载 eBPF。先跑
+上面的演示生成报告，再启动界面：
+
+```bash
+python3 ui/server.py
+```
+
+等价命令是 `make ui`。浏览器打开 http://127.0.0.1:8765/ ，四个页面分别是：
+
+- **总览**：三项评审是否通过，以及从进程树到告警的采集链路；
+- **告警因果**：点一条告警，查看同一 Agent 的 Prompt、Response 和对应系统调用；
+- **事件流**：进程、文件、网络、HTTPS 的数量和脱敏样例；
+- **性能**：文件、进程、网络相对 5% 门槛的采集开销。
+
+再次执行 `make demo-review-all` 之后刷新页面，即可看到新报告。界面只展示
+报告，不替代采集器。
+
+要监测自己的 Agent，先编译，再用 root 把根进程 PID 交给采集器。子进程会继承
+同一个 `agent_id`。`--json` 把事件打到标准输出，分析器据此写告警和关联：
+
+```bash
+make
+sudo ./build/agent-monitor --agent 1:PID --agent 2:PID --json \
+  | python3 -m user.analyzer --config config/rules.yaml
+```
+
+`Ctrl-C` 结束采集。告警写入 `logs/alerts_日期.jsonl`，语义关联写入
+`logs/correlations_日期.jsonl`。离线重放已有事件的命令见下方「配置要点」。
+
 ## HTTPS 明文捕获
 
 review 1 和 review 2 会从两个根 Agent 的 `/proc/PID/maps` 或系统标准路径定位
@@ -161,6 +192,7 @@ python3 -m user.analyzer \
 ├── demo/                 # 三套 review 共用的双 Agent 与本地 HTTPS 负载
 ├── tests/                # 用户态确定性测试
 ├── tools/                # 验收、性能与配置驱动评审演示
+├── ui/                   # 本地监测台，读取评审报告
 ├── docs/                 # 设计、验收与测量报告
 └── Makefile
 ```

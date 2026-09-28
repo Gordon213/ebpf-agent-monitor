@@ -24,7 +24,7 @@ USER_CFLAGS := -g -O2 -Wall -Wextra -Werror -I$(BUILD_DIR) -I$(SRC_DIR) \
 	$(LIBBPF_CFLAGS)
 
 .PHONY: all clean doctor test check demo-review-1 demo-review-2 \
-	demo-review-3 demo-review-all
+	demo-review-3 demo-review-all ui
 
 all: $(BUILD_DIR)/agent-monitor
 
@@ -71,6 +71,9 @@ demo-review-3: all
 
 demo-review-all: all
 	$(PYTHON) tools/run_review_demo.py --all
+
+ui:
+	$(PYTHON) ui/server.py
 
 clean:
 	rm -rf $(BUILD_DIR)

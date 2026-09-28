@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentScope-eBPF 监测台</title>
+  <style>
+    :root {
+      --bg: #f3efe6;
+      --panel: #fffdf8;
+      --ink: #1c1914;
+      --muted: #5e584e;
+      --line: #e4dccf;
+      --ok: #1d6b45;
+      --ok-bg: #e5f2ea;
+      --high: #8a4b08;
+      --high-bg: #f8ecd9;
+      --crit: #8d2f2a;
+      --crit-bg: #f8e6e3;
+      --accent: #1f4f4a;
+      --accent-soft: #e4efed;
+      --shadow: 0 1px 0 rgba(28, 25, 20, 0.04);
+      font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    button, select { font: inherit; }
+    button { cursor: pointer; }
+
+    .app {
+      display: grid;
+      grid-template-columns: 232px 1fr;
+      min-height: 100vh;
+    }
+    .nav {
+      padding: 28px 18px;
+      border-right: 1px solid var(--line);
+      background: #ebe4d6;
+    }
+    .mark {
+      font-family: Palatino, "Palatino Linotype", "Songti SC", serif;
+      font-size: 22px;
+      letter-spacing: -0.03em;
+      margin: 0;
+    }
+    .mark span { color: var(--accent); }
+    .nav p {
+      margin: 8px 0 28px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .nav button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      color: var(--ink);
+      padding: 10px 12px;
+      border-radius: 8px;
+      margin-bottom: 4px;
+    }
+    .nav button.active {
+      background: var(--panel);
+      color: var(--accent);
+      font-weight: 650;
+    }
+    main { padding: 28px 36px 64px; max-width: 1180px; }
+    .view { display: none; }
+    .view.active { display: block; }
+    h1 {
+      font-family: Palatino, "Palatino Linotype", "Songti SC", serif;
+      font-size: 34px;
+      font-weight: 500;
+      letter-spacing: -0.03em;
+      margin: 0 0 8px;
+    }
+    .lede { margin: 0 0 22px; color: var(--muted); max-width: 68ch; line-height: 1.55; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .card, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+    .card { padding: 16px 16px 14px; }
+    .card h2, .panel h2 { margin: 0 0 6px; font-size: 15px; font-weight: 650; }
+    .meta { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .pill {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+    .pill.ok { background: var(--ok-bg); color: var(--ok); }
+    .pill.bad { background: var(--crit-bg); color: var(--crit); }
+    .pill.high { background: var(--high-bg); color: var(--high); }
+    .pill.crit { background: var(--crit-bg); color: var(--crit); }
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      margin: 18px 0 22px;
+    }
+    .step {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      min-height: 92px;
+    }
+    .step strong { display: block; margin-bottom: 6px; font-size: 13px; }
+    .step span { color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .counts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .count {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-radius: 8px;
+      padding: 8px 10px;
+      min-width: 92px;
+    }
+    .count b { display: block; font-size: 18px; }
+    .count span { font-size: 12px; }
+    .toolbar { margin: 8px 0 14px; }
+    .toolbar button, .ghost {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 999px;
+      padding: 6px 12px;
+    }
+    .toolbar button.active { background: var(--accent); color: white; border-color: var(--accent); }
+    .layout { display: grid; gap: 14px; align-items: start; }
+    .alert-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .alert {
+      text-align: left;
+      width: 100%;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .alert.selected { border-color: var(--accent); }
+    .alert .title { font-weight: 650; margin: 6px 0 4px; }
+    .chain {
+      display: grid;
+      grid-template-columns: 1fr 28px 1fr 28px 1fr;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .chain article {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .chain article h3 { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+    .chain .arrow { display: grid; place-items: center; color: var(--muted); font-size: 20px; }
+    .mono {
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 12px; overflow: hidden; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: top; }
+    th { color: var(--muted); font-weight: 650; font-size: 12px; }
+    .bars { display: flex; flex-direction: column; gap: 16px; }
+    .bar-row { display: grid; grid-template-columns: 88px 1fr 180px; gap: 12px; align-items: center; }
+    .track { position: relative; height: 22px; background: #efe8dc; border-radius: 999px; }
+    .fill { height: 100%; background: var(--accent); border-radius: 999px; }
+    .limit {
+      position: absolute; top: -3px; bottom: -3px; right: 0; width: 2px; background: var(--crit);
+    }
+    .note { margin-top: 14px; color: var(--muted); font-size: 12px; }
+    .error { color: var(--crit); }
+    @media (max-width: 980px) {
+      .app { grid-template-columns: 1fr; }
+      .nav { border-right: 0; border-bottom: 1px solid var(--line); }
+      .cards, .pipeline, .chain, .bar-row, .alert-list { grid-template-columns: 1fr; }
+      .chain .arrow { transform: rotate(90deg); height: 20px; }
+      main { padding: 20px 16px 48px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="nav">
+      <p class="mark">Agent<span>Scope</span></p>
+      <p>eBPF 内核采集，用户态把 Prompt 和系统调用串成证据。</p>
+      <button type="button" class="active" data-view="overview">总览</button>
+      <button type="button" data-view="alerts">告警因果</button>
+      <button type="button" data-view="events">事件流</button>
+      <button type="button" data-view="performance">性能</button>
+    </aside>
+    <main>
+      <section id="overview" class="view active"></section>
+      <section id="alerts" class="view"></section>
+      <section id="events" class="view"></section>
+      <section id="performance" class="view"></section>
+    </main>
+  </div>
+  <script>
+    const TYPE_LABEL = {
+      fork: "创建进程", exec: "执行程序", exit: "进程退出", openat: "打开文件",
+      unlink: "删除文件", unlinkat: "按目录删除", rmdir: "删除目录", connect: "发起连接",
+      tls_read: "HTTPS 响应", tls_write: "HTTPS 请求"
+    };
+    const ANOMALY_LABEL = {
+      unexpected_shell: "非预期 Shell",
+      infinite_loop: "逻辑死循环",
+      resource_contention: "写竞争",
+      unauthorized_agent_handoff: "未授权传递",
+      sensitive_file_access: "敏感文件",
+      collective_api_storm: "集体请求风暴",
+      resource_abuse: "资源滥用",
+      excessive_file_deletion: "批量删除",
+      malicious_destination: "恶意地址",
+      high_risk_network_port: "高危端口",
+      workspace_boundary_violation: "工作区越界"
+    };
+    const SCENARIO_LABEL = { file: "文件", exec: "进程", network: "网络" };
+
+    let data = null;
+    let reviewKey = "review-1";
+    let selectedAlert = 0;
+
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[ch]));
+    }
+    function reviewById(id) {
+      return (data.reviews || []).find((item) => item.id === id) || data.reviews[0];
+    }
+    function pill(pass) {
+      return `<span class="pill ${pass ? "ok" : "bad"}">${pass ? "PASS" : "FAIL"}</span>`;
+    }
+    function severityPill(severity) {
+      const kind = severity === "critical" ? "crit" : "high";
+      const text = severity === "critical" ? "严重" : "高";
+      return `<span class="pill ${kind}">${text}</span>`;
+    }
+
+    function renderOverview() {
+      const primary = reviewById("review-1-functional-causality") || data.reviews[0];
+      const cards = data.reviews.map((item) => {
+        if (!item.available) {
+          return `<article class="card"><h2>${esc(item.id)}</h2><p class="error">缺少报告 ${esc(item.path)}</p></article>`;
+        }
+        const env = item.environment || {};
+        return `<article class="card">
+          <div class="row">${pill(item.pass)}<span class="meta">${esc(item.checks_passed)}/${esc(item.checks_total)} 项检查</span></div>
+          <h2>${esc(item.title)}</h2>
+          <p class="meta">${esc(item.description)}</p>
+          <p class="meta">${esc(env.kernel || "")} ${esc(env.machine || "")}<br>${esc(item.generated_at || "")}</p>
+        </article>`;
+      }).join("");
+      const counts = Object.entries(primary && primary.event_counts || {}).map(([name, count]) =>
+        `<div class="count"><b>${esc(count)}</b><span>${esc(TYPE_LABEL[name] || name)}</span></div>`
+      ).join("");
+      document.getElementById("overview").innerHTML = `
+        <h1>同时盯住多个 Agent 的进程树</h1>
+        <p class="lede">不改内核，也不改 Agent。内核态只采集已注册进程的文件、网络、进程生命周期和 OpenSSL 明文；用户态再把 Prompt、Response 和这些动作按同一 Agent、有限时间窗关联起来。</p>
+        <div class="cards">${cards}</div>
+        <div class="pipeline">
+          <div class="step"><strong>Agent 进程树</strong><span>根进程注册后，子进程继承同一个 agent_id。</span></div>
+          <div class="step"><strong>eBPF 采集</strong><span>tracepoint 看系统调用，uprobe 看 SSL_read / SSL_write。</span></div>
+          <div class="step"><strong>Ring Buffer</strong><span>内核满了就计数丢弃，不挡住 Agent。</span></div>
+          <div class="step"><strong>语义关联</strong><span>重组 HTTP/JSON，脱敏 Token，再对齐系统事件。</span></div>
+          <div class="step"><strong>告警证据</strong><span>每条异常带 PID、对象、Prompt 和 Response。</span></div>
+        </div>
+        <h2>最近一次功能评审收到的事件</h2>
+        <div class="counts">${counts || "<p class='meta'>还没有事件计数。</p>"}</div>`;
+    }
+
+    function alertButton(alert, index) {
+      const label = ANOMALY_LABEL[alert.anomaly_type] || alert.anomaly_type;
+      return `<button type="button" class="alert ${index === selectedAlert ? "selected" : ""}" data-alert="${index}">
+        <div class="row">${severityPill(alert.severity)}<span class="meta">${esc(label)}</span></div>
+        <div class="title">${esc(alert.agent_name || "Agent " + alert.agent_id)}</div>
+        <div class="meta mono">${esc(alert.operation)} ${esc(alert.object || alert.title)}</div>
+      </button>`;
+    }
+
+    function renderAlerts() {
+      const review = reviewById(reviewKey);
+      const alerts = (review && review.alerts) || [];
+      if (selectedAlert >= alerts.length) selectedAlert = 0;
+      const current = alerts[selectedAlert];
+      const choices = data.reviews.filter((item) => item.available && item.id !== "review-3-performance").map((item) =>
+        `<button type="button" data-review="${esc(item.id)}" class="${item.id === reviewKey ? "active" : ""}">${esc(item.title)}</button>`
+      ).join("");
+      let detail = `<p class="meta">这份报告里没有告警。</p>`;
+      if (current) {
+        detail = `<div class="chain">
+          <article>
+            <h3>Prompt</h3>
+            <div class="mono">${esc(current.causal_prompt || "没有关联到 Prompt")}</div>
+            <p class="meta">${esc(current.agent_name)} · ${esc(current.time || "")}</p>
+          </article>
+          <div class="arrow">→</div>
+          <article>
+            <h3>Response</h3>
+            <div class="mono">${esc(current.causal_response || "没有响应文本")}</div>
+            <p class="meta">间隔 ${esc(current.causal_age_ms ?? "-")} ms</p>
+          </article>
+          <div class="arrow">→</div>
+          <article>
+            <h3>${esc(ANOMALY_LABEL[current.anomaly_type] || current.anomaly_type)}</h3>
+            <div class="mono">${esc(current.operation)} ${esc(current.object || current.title)}</div>
+            <p class="meta">PID ${esc(current.pid)} / TID ${esc(current.tid)} · 返回值 ${esc(current.retval)}</p>
+            <p class="meta">${esc((current.details || {}).causal_evidence || current.description || "")}</p>
+          </article>
+        </div>`;
+      }
+      document.getElementById("alerts").innerHTML = `
+        <h1>从对话追到系统调用</h1>
+        <p class="lede">关联模型是同一 Agent 加上有限时间窗。界面把它标成证据，而不是绝对因果。</p>
+        <div class="toolbar row">${choices}</div>
+        <div class="layout">
+          <div>${detail}</div>
+          <div class="alert-list">${alerts.map(alertButton).join("") || "<p class='meta'>没有告警。</p>"}</div>
+        </div>`;
+    }
+
+    function renderEvents() {
+      const review = reviewById(reviewKey);
+      const events = (review && review.sample_events) || [];
+      const counts = Object.entries((review && review.event_counts) || {}).map(([name, count]) =>
+        `<div class="count"><b>${esc(count)}</b><span>${esc(TYPE_LABEL[name] || name)}</span></div>`
+      ).join("");
+      const rows = events.map((event) => `<tr>
+        <td class="mono">${esc(event.time || "")}</td>
+        <td>${esc(TYPE_LABEL[event.type] || event.type)}</td>
+        <td>${esc(event.agent_id)}</td>
+        <td class="mono">${esc(event.tgid)}/${esc(event.tid)}</td>
+        <td class="mono">${esc(event.comm || "")}</td>
+        <td class="mono">${esc(event.object || ((event.destination || "") + (event.port ? ":" + event.port : "")) || "-")}</td>
+        <td class="mono">${esc(event.retval)}</td>
+      </tr>`).join("");
+      document.getElementById("events").innerHTML = `
+        <h1>内核实际交出来的事件</h1>
+        <p class="lede">样例来自所选评审报告。每种类型只保留一条脱敏记录，计数才是全量。</p>
+        <div class="counts">${counts}</div>
+        <div style="height:14px"></div>
+        <table>
+          <thead><tr><th>时间</th><th>类型</th><th>Agent</th><th>PID/TID</th><th>进程</th><th>对象</th><th>返回值</th></tr></thead>
+          <tbody>${rows || "<tr><td colspan='7'>没有样例事件。</td></tr>"}</tbody>
+        </table>`;
+    }
+
+    function renderPerformance() {
+      const perf = data.performance || {};
+      if (!perf.available) {
+        document.getElementById("performance").innerHTML = `<h1>采集开销</h1><p class="error">缺少 ${esc(perf.path)}</p>`;
+        return;
+      }
+      const rows = Object.entries(perf.scenarios || {}).map(([name, result]) => {
+        const median = Number(result.median_overhead_percent || 0);
+        const upper = Number(result.median_95_percent_upper || 0);
+        const width = median <= 0 ? 1.5 : Math.max(0, Math.min(100, (median / 5) * 100));
+        return `<div class="bar-row">
+          <strong>${esc(SCENARIO_LABEL[name] || name)}</strong>
+          <div class="track"><div class="fill" style="width:${width}%"></div><div class="limit" title="5% 门槛"></div></div>
+          <div class="meta">中位数 ${median.toFixed(3)}%<br>95% 上界 ${upper.toFixed(3)}% ${result.pass ? "PASS" : "FAIL"}</div>
+        </div>`;
+      }).join("");
+      document.getElementById("performance").innerHTML = `
+        <h1>采集本身慢了多少</h1>
+        <p class="lede">条形按 5% 门槛拉满。测量的是 BPF 加载、Ring Buffer 和逐事件消费，不含 JSON、关联和告警。</p>
+        <div class="panel" style="padding:18px">
+          <div class="bars">${rows}</div>
+          <p class="note">红色刻度是 5% 门槛。中位数为负时，监测组比基线更快，条形留在起点。来源：performance_report.json · ${esc(perf.kernel)} ${esc(perf.machine)} · ${esc(perf.profile)} · ${esc(perf.iterations)} 组配对 · ${esc(perf.generated_at)}</p>
+        </div>`;
+    }
+
+    function render() {
+      renderOverview();
+      renderAlerts();
+      renderEvents();
+      renderPerformance();
+    }
+
+    function showView(name) {
+      if (!document.getElementById(name)) return;
+      document.querySelectorAll(".nav button").forEach((button) => button.classList.toggle("active", button.dataset.view === name));
+      document.querySelectorAll(".view").forEach((view) => view.classList.toggle("active", view.id === name));
+    }
+
+    document.body.addEventListener("click", (event) => {
+      const nav = event.target.closest(".nav button");
+      if (nav) {
+        showView(nav.dataset.view);
+        return;
+      }
+      const review = event.target.closest("[data-review]");
+      if (review) {
+        reviewKey = review.dataset.review;
+        selectedAlert = 0;
+        renderAlerts();
+        renderEvents();
+        return;
+      }
+      const alert = event.target.closest("[data-alert]");
+      if (alert) {
+        selectedAlert = Number(alert.dataset.alert);
+        renderAlerts();
+      }
+    });
+
+    fetch("/api/showcase").then((response) => response.json()).then((payload) => {
+      data = payload;
+      const functional = (data.reviews || []).find((item) => item.id === "review-1-functional-causality");
+      reviewKey = functional ? functional.id : ((data.reviews || [])[0] || {}).id;
+      const requestedAlert = Number(new URLSearchParams(location.search).get("alert"));
+      if (Number.isInteger(requestedAlert) && requestedAlert >= 0) selectedAlert = requestedAlert;
+      render();
+      if (location.hash) showView(location.hash.slice(1));
+    }).catch((error) => {
+      document.getElementById("overview").innerHTML = `<h1>监测台没有拿到数据</h1><p class="error">${esc(error)}</p>`;
+    });
+  </script>
+</body>
+</html>
