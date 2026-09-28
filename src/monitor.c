@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -248,6 +249,39 @@ static bool parse_agent(const char *text, struct agent_spec *agent)
     memcpy(id_text, text, id_length);
     id_text[id_length] = '\0';
     return parse_u32(id_text, &agent->id) && parse_u32(separator + 1, &agent->pid);
+}
+
+static bool read_pid_namespace(__u32 pid, struct stat *info)
+{
+    char path[64];
+
+    snprintf(path, sizeof(path), "/proc/%u/ns/pid", pid);
+    return stat(path, info) == 0;
+}
+
+static void configure_pid_namespace(struct monitor_bpf *skeleton,
+                                    const struct agent_spec *agents,
+                                    size_t agent_count)
+{
+    struct stat info;
+    struct stat other;
+    size_t index;
+
+    if (!agent_count || !read_pid_namespace(agents[0].pid, &info)) {
+        fprintf(stderr,
+                "warning: pid namespace is unresolved; agent lookup uses kernel pids\n");
+        return;
+    }
+    for (index = 1; index < agent_count; index++) {
+        if (!read_pid_namespace(agents[index].pid, &other) ||
+            other.st_dev != info.st_dev || other.st_ino != info.st_ino) {
+            fprintf(stderr,
+                    "warning: Agent %u is outside Agent %u's pid namespace\n",
+                    agents[index].id, agents[0].id);
+        }
+    }
+    skeleton->rodata->pidns_dev = (__u64)info.st_dev;
+    skeleton->rodata->pidns_ino = (__u64)info.st_ino;
 }
 
 static bool tracepoint_exists(const char *name)
@@ -535,6 +569,7 @@ int main(int argc, char **argv)
     configure_syscall_pair(skeleton->progs.handle_connect_enter,
                            skeleton->progs.handle_connect_exit, "connect");
     configure_tls_programs(skeleton, tls_enabled);
+    configure_pid_namespace(skeleton, agents, agent_count);
 
     error = monitor_bpf__load(skeleton);
     if (error) {

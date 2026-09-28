@@ -1,8 +1,8 @@
 # Performance report
 
-Generated: 2026-09-28T02:58:11.113437+00:00
+Generated: 2026-09-28T07:39:29.995046+00:00
 
-Environment: Linux 6.8.0-139-generic (aarch64)
+Environment: Linux 6.6.114.1-microsoft-standard-WSL2 (x86_64)
 
 Profile: `representative`; fixed decision rounds per sample: 24; workload CPU: 0; monitor CPU: 1.
 
@@ -11,9 +11,9 @@ The representative profile combines a batch of real file/process/network tool op
 
 | Scenario | Operations/pair | Median overhead | 95% upper | Result |
 |---|---:|---:|---:|---|
-| file | 1000 | 1.125% | 2.675% | PASS |
-| exec | 40 | 0.031% | 1.037% | PASS |
-| network | 500 | 1.307% | 2.264% | PASS |
+| file | 1000 | 1.605% | 2.143% | PASS |
+| exec | 40 | -0.299% | 0.448% | PASS |
+| network | 500 | 0.984% | 1.692% | PASS |
 
 Overall result: **PASS** (both statistics must be <= 5% for every scenario).
 

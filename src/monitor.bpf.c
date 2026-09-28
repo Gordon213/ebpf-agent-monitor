@@ -8,6 +8,15 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
+/* stat(/proc/PID/ns/pid) of the monitored namespace. Zero keeps the init-ns view. */
+const volatile __u64 pidns_dev = 0;
+const volatile __u64 pidns_ino = 0;
+
+struct ns_ids {
+    __u32 tgid;
+    __u32 tid;
+};
+
 #ifndef AF_INET
 #define AF_INET 2
 #endif
@@ -76,11 +85,62 @@ struct {
     __type(value, struct pending_tls);
 } pending_tls_calls SEC(".maps");
 
+static __always_inline void current_ns_ids(struct ns_ids *ids)
+{
+    struct bpf_pidns_info info = {};
+    __u64 pid_tgid;
+
+    if (pidns_dev && pidns_ino &&
+        !bpf_get_ns_current_pid_tgid(pidns_dev, pidns_ino, &info, sizeof(info))) {
+        ids->tgid = info.tgid;
+        ids->tid = info.pid;
+        return;
+    }
+    pid_tgid = bpf_get_current_pid_tgid();
+    ids->tgid = pid_tgid >> 32;
+    ids->tid = (__u32)pid_tgid;
+}
+
+/* Pid number of this task in its innermost pid namespace. */
+static __always_inline __u32 task_namespace_pid(struct task_struct *task)
+{
+    struct pid *pid_struct;
+    unsigned int level;
+
+    if (!task)
+        return 0;
+    pid_struct = BPF_CORE_READ(task, thread_pid);
+    if (!pid_struct)
+        return 0;
+    level = BPF_CORE_READ(pid_struct, level);
+    if (level == 0)
+        return (__u32)BPF_CORE_READ(pid_struct, numbers[0].nr);
+    if (level == 1)
+        return (__u32)BPF_CORE_READ(pid_struct, numbers[1].nr);
+    if (level == 2)
+        return (__u32)BPF_CORE_READ(pid_struct, numbers[2].nr);
+    if (level == 3)
+        return (__u32)BPF_CORE_READ(pid_struct, numbers[3].nr);
+    return 0;
+}
+
+static __always_inline __u32 task_namespace_tgid(struct task_struct *task)
+{
+    struct task_struct *leader;
+
+    if (!task)
+        return 0;
+    leader = BPF_CORE_READ(task, group_leader);
+    return task_namespace_pid(leader ? leader : task);
+}
+
 static __always_inline __u32 current_agent_id(void)
 {
-    __u32 tgid = bpf_get_current_pid_tgid() >> 32;
-    __u32 *agent_id = bpf_map_lookup_elem(&tracked_tgids, &tgid);
+    struct ns_ids self = {};
+    __u32 *agent_id;
 
+    current_ns_ids(&self);
+    agent_id = bpf_map_lookup_elem(&tracked_tgids, &self.tgid);
     return agent_id ? *agent_id : 0;
 }
 
@@ -96,21 +156,28 @@ static __always_inline void count_drop(void)
 static __always_inline void initialize_event(struct event *event, __u32 type,
                                              __u32 agent_id)
 {
-    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    struct ns_ids self = {};
     __u64 uid_gid = bpf_get_current_uid_gid();
     struct task_struct *task;
+    struct task_struct *parent;
+    __u32 ppid;
 
+    current_ns_ids(&self);
     __builtin_memset(event, 0, EVENT_BASE_SIZE);
     event->timestamp_ns = bpf_ktime_get_ns();
     event->agent_id = agent_id;
-    event->tgid = pid_tgid >> 32;
-    event->tid = (__u32)pid_tgid;
+    event->tgid = self.tgid;
+    event->tid = self.tid;
     event->uid = (__u32)uid_gid;
     event->gid = uid_gid >> 32;
     event->type = type;
     event->dirfd = -1;
     task = (struct task_struct *)bpf_get_current_task();
-    event->ppid = BPF_CORE_READ(task, real_parent, tgid);
+    parent = BPF_CORE_READ(task, real_parent);
+    ppid = task_namespace_tgid(parent);
+    if (!ppid)
+        ppid = BPF_CORE_READ(task, real_parent, tgid);
+    event->ppid = ppid;
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 }
 
@@ -190,18 +257,23 @@ cleanup:
     return 0;
 }
 
-SEC("tracepoint/sched/sched_process_fork")
-int handle_fork(struct trace_event_raw_sched_process_fork *ctx)
+SEC("raw_tracepoint/sched_process_fork")
+int handle_fork(struct bpf_raw_tracepoint_args *ctx)
 {
-    __u32 parent_tgid = bpf_get_current_pid_tgid() >> 32;
-    __u32 child_pid = BPF_CORE_READ(ctx, child_pid);
+    struct ns_ids self = {};
+    struct task_struct *child = (struct task_struct *)ctx->args[1];
+    __u32 child_pid;
     __u32 *agent_id;
     struct event *event;
 
-    agent_id = bpf_map_lookup_elem(&tracked_tgids, &parent_tgid);
+    current_ns_ids(&self);
+    agent_id = bpf_map_lookup_elem(&tracked_tgids, &self.tgid);
     if (!agent_id)
         return 0;
 
+    child_pid = task_namespace_tgid(child);
+    if (!child_pid)
+        child_pid = BPF_CORE_READ(child, tgid);
     bpf_map_update_elem(&tracked_tgids, &child_pid, agent_id, BPF_ANY);
     event = new_event(EVENT_FORK, *agent_id);
     if (!event)
@@ -236,9 +308,7 @@ int handle_exec(struct trace_event_raw_sched_process_exec *ctx)
 SEC("tracepoint/sched/sched_process_exit")
 int handle_exit(struct trace_event_raw_sched_process_template *ctx)
 {
-    __u64 pid_tgid = bpf_get_current_pid_tgid();
-    __u32 tgid = pid_tgid >> 32;
-    __u32 tid = (__u32)pid_tgid;
+    struct ns_ids self = {};
     __u32 agent_id = current_agent_id();
     struct event *event;
 
@@ -250,8 +320,9 @@ int handle_exit(struct trace_event_raw_sched_process_template *ctx)
     if (event)
         bpf_ringbuf_submit(event, 0);
 
-    if (tid == tgid)
-        bpf_map_delete_elem(&tracked_tgids, &tgid);
+    current_ns_ids(&self);
+    if (self.tid == self.tgid)
+        bpf_map_delete_elem(&tracked_tgids, &self.tgid);
     return 0;
 }
 
