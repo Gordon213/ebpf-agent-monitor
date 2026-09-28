@@ -181,11 +181,31 @@
       position: absolute; top: -3px; bottom: -3px; right: 0; width: 2px; background: var(--crit);
     }
     .note { margin-top: 14px; color: var(--muted); font-size: 12px; }
+    .scenarios { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+    .scenario {
+      text-align: left;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .scenario strong { display: block; margin-bottom: 6px; }
+    .scenario.selected { border-color: var(--accent); background: var(--accent-soft); }
+    .scenario:disabled { opacity: 0.6; cursor: wait; }
+    .timeline { margin: 8px 0 18px; }
+    .step { display: grid; grid-template-columns: 72px 18px 1fr; gap: 10px; }
+    .step .when { color: var(--muted); font-size: 12px; padding-top: 12px; font-variant-numeric: tabular-nums; }
+    .rail { position: relative; }
+    .rail::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 0; width: 2px; background: var(--line); }
+    .rail::after { content: ""; position: absolute; left: 3px; top: 16px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+    .step.fired .rail::after { background: var(--crit); }
+    .step .body { background: #faf7f1; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+    .verdict { border: 1px solid #e7c7c4; background: var(--crit-bg); border-radius: 12px; padding: 14px; }
     .error { color: var(--crit); }
     @media (max-width: 980px) {
       .app { grid-template-columns: 1fr; }
       .nav { border-right: 0; border-bottom: 1px solid var(--line); }
-      .cards, .pipeline, .chain, .bar-row, .alert-list { grid-template-columns: 1fr; }
+      .cards, .pipeline, .chain, .bar-row, .alert-list, .scenarios { grid-template-columns: 1fr; }
       .chain .arrow { transform: rotate(90deg); height: 20px; }
       main { padding: 20px 16px 48px; }
     }
@@ -196,13 +216,15 @@
     <aside class="nav">
       <p class="mark">Agent<span>Scope</span></p>
       <p>eBPF 内核采集，用户态把 Prompt 和系统调用串成证据。</p>
-      <button type="button" class="active" data-view="overview">总览</button>
+      <button type="button" class="active" data-view="trigger">触发异常</button>
+      <button type="button" data-view="overview">总览</button>
       <button type="button" data-view="alerts">告警因果</button>
       <button type="button" data-view="events">事件流</button>
       <button type="button" data-view="performance">性能</button>
     </aside>
     <main>
-      <section id="overview" class="view active"></section>
+      <section id="trigger" class="view active"></section>
+      <section id="overview" class="view"></section>
       <section id="alerts" class="view"></section>
       <section id="events" class="view"></section>
       <section id="performance" class="view"></section>
@@ -228,10 +250,14 @@
       workspace_boundary_violation: "工作区越界"
     };
     const SCENARIO_LABEL = { file: "文件", exec: "进程", network: "网络" };
-
     let data = null;
     let reviewKey = "review-1";
     let selectedAlert = 0;
+    let scenarios = [];
+    let activeScenario = "";
+    let scenarioResult = null;
+    let scenarioBusy = false;
+    let scenarioError = "";
 
     function esc(value) {
       return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -248,6 +274,95 @@
       const kind = severity === "critical" ? "crit" : "high";
       const text = severity === "critical" ? "严重" : "高";
       return `<span class="pill ${kind}">${text}</span>`;
+    }
+
+    function chainMarkup(alert) {
+      const label = ANOMALY_LABEL[alert.anomaly_type] || alert.anomaly_type;
+      return `<div class="chain">
+        <article>
+          <h3>Prompt</h3>
+          <div class="mono">${esc(alert.causal_prompt || "没有关联到 Prompt")}</div>
+          <p class="meta">${esc(alert.agent_name)} · ${esc(alert.time || "")}</p>
+        </article>
+        <div class="arrow">→</div>
+        <article>
+          <h3>Response</h3>
+          <div class="mono">${esc(alert.causal_response || "没有响应文本")}</div>
+          <p class="meta">间隔 ${esc(alert.causal_age_ms ?? "-")} ms</p>
+        </article>
+        <div class="arrow">→</div>
+        <article>
+          <h3>${esc(label)}</h3>
+          <div class="mono">${esc(alert.operation)} ${esc(alert.object || alert.title)}</div>
+          <p class="meta">PID ${esc(alert.pid)} / TID ${esc(alert.tid)} · 返回值 ${esc(alert.retval)}</p>
+          <p class="meta">${esc((alert.details || {}).causal_evidence || alert.description || "")}</p>
+        </article>
+      </div>`;
+    }
+
+    function renderTrigger() {
+      const buttons = scenarios.map((item) => `<button type="button" class="scenario ${item.id === activeScenario ? "selected" : ""}" data-scenario="${esc(item.id)}" ${scenarioBusy ? "disabled" : ""}>
+        <strong>${esc(item.title)}</strong>
+        <span class="meta">${esc(item.summary)}</span>
+      </button>`).join("");
+      let result = `<p class="meta">选择一种异常。页面会生成对应的系统事件，交给 <span class="mono">config/rules.yaml</span> 里的规则引擎，再把命中的告警显示在下面。</p>`;
+      if (scenarioError) result = `<p class="error">${esc(scenarioError)}</p>`;
+      if (scenarioResult) {
+        const steps = (scenarioResult.steps || []).map((step) => {
+          const fired = (step.triggered || []).length > 0;
+          const when = step.count > 1 ? `+${step.offset_ms}–${step.end_offset_ms} ms` : `+${step.offset_ms} ms`;
+          const badge = fired ? `<div class="meta">此步触发：${esc((step.triggered || []).map((type) => ANOMALY_LABEL[type] || type).join("、"))}</div>` : "";
+          return `<div class="step ${fired ? "fired" : ""}">
+            <div class="when">${esc(when)}</div>
+            <div class="rail"></div>
+            <div class="body">
+              <strong>${esc(step.title)}</strong>
+              <div class="mono" style="margin-top:4px">${esc(step.detail)}</div>
+              ${badge}
+            </div>
+          </div>`;
+        }).join("");
+        const alerts = (scenarioResult.alerts || []).map((alert) => `<div style="margin-top:14px">
+          ${severityPill(alert.severity)} <strong>${esc(ANOMALY_LABEL[alert.anomaly_type] || alert.anomaly_type)}</strong>
+          <p class="meta">${esc(alert.rule || "")}</p>
+          ${chainMarkup(alert)}
+        </div>`).join("");
+        const verdict = alerts
+          ? `<div class="verdict"><strong>最终结果：+${esc(scenarioResult.duration_ms)} ms 判定告警 ${esc((scenarioResult.alerts || []).length)} 条</strong>${alerts}</div>`
+          : `<div class="verdict"><strong>最终结果：没有告警</strong><p class="meta">这组事件没有越过 config/rules.yaml 里的阈值。</p></div>`;
+        result = `<h2 id="scenario-flow">${esc(scenarioResult.title)}</h2>
+          <p class="lede">${esc(scenarioResult.summary)} 下面从 +0 ms 看到 +${esc(scenarioResult.duration_ms)} ms，标红的圆点是规则被触发的那一步。</p>
+          <div class="timeline">${steps}</div>
+          ${verdict}`;
+      }
+      document.getElementById("trigger").innerHTML = `
+        <h1>点一下，触发一种异常</h1>
+        <p class="lede">每个按钮对应一条检测规则。点击后，监测台按这种异常生成进程、文件或网络事件，交给分析器当场判定。</p>
+        <div class="scenarios">${buttons || "<p class='meta'>规则列表还没有加载。</p>"}</div>
+        <div class="panel" style="padding:16px">${scenarioBusy ? "<p class='meta'>正在检测…</p>" : result}</div>`;
+    }
+
+    function triggerScenario(name) {
+      if (scenarioBusy) return;
+      activeScenario = name;
+      scenarioBusy = true;
+      scenarioError = "";
+      renderTrigger();
+      fetch("/api/scenarios/" + encodeURIComponent(name), { method: "POST" })
+        .then((response) => response.json().then((payload) => ({ ok: response.ok, payload })))
+        .then(({ ok, payload }) => {
+          if (!ok) throw new Error(payload.error || "检测失败");
+          scenarioResult = payload;
+        })
+        .catch((error) => {
+          scenarioResult = null;
+          scenarioError = error.message || String(error);
+        })
+        .finally(() => {
+          scenarioBusy = false;
+          renderTrigger();
+          document.getElementById("scenario-flow")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
     }
 
     function renderOverview() {
@@ -300,28 +415,7 @@
         `<button type="button" data-review="${esc(item.id)}" class="${item.id === reviewKey ? "active" : ""}">${esc(item.title)}</button>`
       ).join("");
       let detail = `<p class="meta">这份报告里没有告警。</p>`;
-      if (current) {
-        detail = `<div class="chain">
-          <article>
-            <h3>Prompt</h3>
-            <div class="mono">${esc(current.causal_prompt || "没有关联到 Prompt")}</div>
-            <p class="meta">${esc(current.agent_name)} · ${esc(current.time || "")}</p>
-          </article>
-          <div class="arrow">→</div>
-          <article>
-            <h3>Response</h3>
-            <div class="mono">${esc(current.causal_response || "没有响应文本")}</div>
-            <p class="meta">间隔 ${esc(current.causal_age_ms ?? "-")} ms</p>
-          </article>
-          <div class="arrow">→</div>
-          <article>
-            <h3>${esc(ANOMALY_LABEL[current.anomaly_type] || current.anomaly_type)}</h3>
-            <div class="mono">${esc(current.operation)} ${esc(current.object || current.title)}</div>
-            <p class="meta">PID ${esc(current.pid)} / TID ${esc(current.tid)} · 返回值 ${esc(current.retval)}</p>
-            <p class="meta">${esc((current.details || {}).causal_evidence || current.description || "")}</p>
-          </article>
-        </div>`;
-      }
+      if (current) detail = chainMarkup(current);
       document.getElementById("alerts").innerHTML = `
         <h1>从对话追到系统调用</h1>
         <p class="lede">关联模型是同一 Agent 加上有限时间窗。界面把它标成证据，而不是绝对因果。</p>
@@ -384,6 +478,7 @@
     }
 
     function render() {
+      renderTrigger();
       renderOverview();
       renderAlerts();
       renderEvents();
@@ -414,7 +509,18 @@
       if (alert) {
         selectedAlert = Number(alert.dataset.alert);
         renderAlerts();
+        return;
       }
+      const scenario = event.target.closest("[data-scenario]");
+      if (scenario) triggerScenario(scenario.dataset.scenario);
+    });
+
+    fetch("/api/scenarios").then((response) => response.json()).then((payload) => {
+      scenarios = payload.scenarios || [];
+      if (!scenarioBusy) renderTrigger();
+    }).catch(() => {
+      scenarioError = "规则列表加载失败";
+      renderTrigger();
     });
 
     fetch("/api/showcase").then((response) => response.json()).then((payload) => {
@@ -424,6 +530,8 @@
       const requestedAlert = Number(new URLSearchParams(location.search).get("alert"));
       if (Number.isInteger(requestedAlert) && requestedAlert >= 0) selectedAlert = requestedAlert;
       render();
+      const preset = new URLSearchParams(location.search).get("scenario");
+      if (preset) triggerScenario(preset);
       if (location.hash) showView(location.hash.slice(1));
     }).catch((error) => {
       document.getElementById("overview").innerHTML = `<h1>监测台没有拿到数据</h1><p class="error">${esc(error)}</p>`;

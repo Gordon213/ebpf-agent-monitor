@@ -7,10 +7,15 @@ import argparse
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import json
 from pathlib import Path
+import sys
 import webbrowser
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ui.scenarios import catalog, run_scenario
 UI_DIR = Path(__file__).resolve().parent
 REPORT_DIR = ROOT / "docs" / "review_reports"
 REVIEWS = {
@@ -98,15 +103,42 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(UI_DIR), **kwargs)
 
+    def _json(self, status: int, payload: dict | list) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        path = self.path.split("?", 1)[0]
+        prefix = "/api/scenarios/"
+        if not path.startswith(prefix):
+            self.send_error(404)
+            return
+        name = path[len(prefix) :]
+        try:
+            payload = run_scenario(name)
+        except KeyError:
+            self._json(404, {"error": f"unknown scenario: {name}"})
+            return
+        except (OSError, RuntimeError, ValueError) as error:
+            self._json(500, {"error": str(error)})
+            return
+        self._json(200, payload)
+
     def do_GET(self) -> None:
-        if self.path.split("?", 1)[0] == "/api/showcase":
-            body = json.dumps(showcase_payload(), ensure_ascii=False).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+        path = self.path.split("?", 1)[0]
+        if path == "/api/scenarios":
+            self._json(200, {"scenarios": catalog()})
+            return
+        if path == "/api/showcase":
+            self._json(200, showcase_payload())
             return
         if self.path.split("?", 1)[0] == "/":
             self.path = "/index.html"
