@@ -3,6 +3,7 @@ import unittest
 from user.analyzer import Analyzer, is_within, redact_text
 
 
+# 构造一条符合真实 ABI 的最小事件，测试各检测分支时复用。
 def event(event_type, *, object_name="", retval=0, timestamp_ns=1_000_000_000):
     return {
         "time": "2026-09-14T10:00:00.000",
@@ -24,6 +25,7 @@ def event(event_type, *, object_name="", retval=0, timestamp_ns=1_000_000_000):
 
 
 class AnalyzerTest(unittest.TestCase):
+# 每个用例前装载一份小阈值配置，让告警门槛容易在测试里触发。
     def setUp(self):
         self.config = {
             "unexpected_shells": ["/bin/sh", "/bin/bash"],
@@ -59,20 +61,24 @@ class AnalyzerTest(unittest.TestCase):
         }
         self.analyzer = Analyzer(self.config)
 
+# 路径包含关系必须按目录组件判断，不能把 /tmp/work2 当成 /tmp/work 的子路径。
     def test_path_containment_is_component_aware(self):
         self.assertTrue(is_within("/tmp/work/a", "/tmp/work"))
         self.assertFalse(is_within("/tmp/work2/a", "/tmp/work"))
 
+# 命中 unexpected_shells 的 exec 要产生非预期 Shell 告警。
     def test_shell_launch(self):
         alerts = self.analyzer.process(event("exec", object_name="/bin/sh"))
         self.assertEqual([alert["anomaly_type"] for alert in alerts], ["unexpected_shell"])
 
+# 敏感文件规则只对打开成功的调用生效，失败尝试不告警。
     def test_sensitive_file_requires_success(self):
         success = self.analyzer.process(event("openat", object_name="/etc/passwd", retval=3))
         failure = self.analyzer.process(event("openat", object_name="/etc/passwd", retval=-13))
         self.assertEqual(success[0]["anomaly_type"], "sensitive_file_access")
         self.assertEqual(failure, [])
 
+# 工作区外成功删除要告警，工作区内删除不告警。
     def test_workspace_delete(self):
         inside = self.analyzer.process(event("unlinkat", object_name="/tmp/work/a", retval=0))
         outside = self.analyzer.process(event("unlinkat", object_name="/tmp/work2/a", retval=0))
@@ -81,6 +87,7 @@ class AnalyzerTest(unittest.TestCase):
         self.assertEqual(outside[0]["anomaly_type"], "workspace_boundary_violation")
         self.assertEqual(failed, [])
 
+# 逻辑死循环至少需要两类重复信号同时越过阈值才判定。
     def test_loop_requires_two_repeated_signals(self):
         alerts = []
         for index in range(3):
@@ -107,6 +114,7 @@ class AnalyzerTest(unittest.TestCase):
             [alert["anomaly_type"] for alert in alerts].count("infinite_loop"), 1
         )
 
+# TLS Prompt 里的凭据要脱敏，并且能关联到随后的 shell 行为。
     def test_tls_prompt_is_redacted_and_correlated_to_shell(self):
         body = '{"messages":[{"role":"user","content":"run a shell"}],"api_key":"secret"}'
         tls = event("tls_write", timestamp_ns=1_000_000_000)
@@ -122,6 +130,7 @@ class AnalyzerTest(unittest.TestCase):
         correlations = self.analyzer.drain_correlations()
         self.assertEqual(correlations[-1]["operation"], "exec")
 
+# 分片到达的 TLS JSON 要重组一次，不能重复上报同一条语义。
     def test_fragmented_tls_json_is_reassembled_once(self):
         first = event("tls_write", timestamp_ns=1_000_000_000)
         first["payload"] = '{"prompt":"fragmented'
@@ -133,12 +142,14 @@ class AnalyzerTest(unittest.TestCase):
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0]["text"], "fragmented request")
 
+# Authorization 头和 Bearer Token 等凭据进入日志前必须脱敏。
     def test_redacts_headers_and_bearer_tokens(self):
         redacted = redact_text("Authorization: Bearer abc.def and api_key=topsecret")
         self.assertNotIn("abc.def", redacted)
         self.assertNotIn("topsecret", redacted)
         self.assertIn("[REDACTED]", redacted)
 
+# 恶意 IP 与高危端口规则各自命中并给出正确的告警类型。
     def test_network_risk_rules(self):
         blocked = event("connect")
         blocked["destination"] = "203.0.113.66"
@@ -149,6 +160,7 @@ class AnalyzerTest(unittest.TestCase):
         self.assertEqual(self.analyzer.process(blocked)[0]["anomaly_type"], "malicious_destination")
         self.assertEqual(self.analyzer.process(risky)[0]["anomaly_type"], "high_risk_network_port")
 
+# 进程风暴和批量删除两类资源滥用阈值分别生效。
     def test_process_and_deletion_resource_abuse(self):
         alerts = []
         for index in range(3):
@@ -180,6 +192,7 @@ class AnalyzerTest(unittest.TestCase):
             [alert["anomaly_type"] for alert in deletion_alerts],
         )
 
+# 两个 Agent 写同一文件触发竞争；未授权读取触发传递告警。
     def test_cross_agent_contention_and_handoff(self):
         write_one = event("openat", object_name="/tmp/shared/data", retval=3)
         write_one["flags"] = 1
@@ -202,6 +215,7 @@ class AnalyzerTest(unittest.TestCase):
         handoff = analyzer.process(read_two)
         self.assertEqual(handoff[0]["anomaly_type"], "unauthorized_agent_handoff")
 
+# 多个 Agent 对同一端点的连接总数越阈值触发集体 API 风暴。
     def test_collective_api_storm(self):
         alerts = []
         for index, agent_id in enumerate((1, 2, 1, 2), 1):
@@ -212,6 +226,7 @@ class AnalyzerTest(unittest.TestCase):
             alerts.extend(self.analyzer.process(network))
         self.assertIn("collective_api_storm", [alert["anomaly_type"] for alert in alerts])
 
+# 重复 Prompt 与重复网络连接两类信号组合也能判定死循环。
     def test_repeated_prompt_and_network_form_loop(self):
         alerts = []
         for index in range(2):

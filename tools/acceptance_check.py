@@ -23,6 +23,7 @@ REVIEW_CONFIGS = (
 )
 
 
+# 跑一条外部命令并把它整理成检查项（含返回码与输出）。
 def command_check(name: str, command: list[str], timeout: int = 180) -> dict[str, Any]:
     environment = dict(os.environ)
     environment["PYTHONPYCACHEPREFIX"] = str(ROOT / "build" / "pycache")
@@ -43,6 +44,7 @@ def command_check(name: str, command: list[str], timeout: int = 180) -> dict[str
     }
 
 
+# 校验三份 review 配置的必需字段和 id 唯一性。
 def review_config_check() -> dict[str, Any]:
     problems: list[str] = []
     ids: set[str] = set()
@@ -76,6 +78,7 @@ def review_config_check() -> dict[str, Any]:
     }
 
 
+# 入口：跑依赖、构建、单测、CLI、语法和配置检查，输出 JSON 结论。
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, help="optionally save the JSON result")

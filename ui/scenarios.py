@@ -26,9 +26,11 @@ ScenarioBuilder = Callable[["Clock"], list[dict[str, Any]]]
 class Clock:
     """Pace the offline demonstration and record actual event times."""
 
+    # 初始化模拟时钟（记录是否已开始）。
     def __init__(self) -> None:
         self.started = False
 
+    # 推进模拟时钟：按需真实 sleep，返回当前时间戳。
     def tick(self, delay_ms: int) -> int:
         if self.started and delay_ms > 0:
             time.sleep(delay_ms / 1000)
@@ -36,6 +38,7 @@ class Clock:
         return time.monotonic_ns()
 
 
+# 构造一条符合真实 ABI 的模拟事件。
 def _event(
     clock: Clock,
     agent_id: int,
@@ -77,6 +80,7 @@ def _event(
     }
 
 
+# 构造一条带 Content-Length 的 HTTP 请求或响应报文。
 def _http(kind: str, document: dict[str, Any]) -> str:
     body = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
     body_length = len(body.encode("utf-8"))
@@ -87,6 +91,7 @@ def _http(kind: str, document: dict[str, Any]) -> str:
     return head + body
 
 
+# 生成一次 TLS Prompt/Response 往返的两条事件。
 def _talk(clock: Clock, agent_id: int, prompt: str, response: str) -> list[dict[str, Any]]:
     request = {"messages": [{"role": "user", "content": prompt}]}
     reply = {"choices": [{"message": {"role": "assistant", "content": response}}]}
@@ -96,6 +101,7 @@ def _talk(clock: Clock, agent_id: int, prompt: str, response: str) -> list[dict[
     ]
 
 
+# 场景：Prompt 后启动 /bin/sh。
 def _shell(clock: Clock) -> list[dict[str, Any]]:
     return [
         *_talk(clock, 1, "请在工作区执行检查脚本", "ACK:将启动 shell"),
@@ -103,6 +109,7 @@ def _shell(clock: Clock) -> list[dict[str, Any]]:
     ]
 
 
+# 场景：成功打开受保护路径。
 def _sensitive(clock: Clock) -> list[dict[str, Any]]:
     return [
         *_talk(clock, 2, "读取受保护的结果文件", "ACK:准备打开敏感路径"),
@@ -116,6 +123,7 @@ def _sensitive(clock: Clock) -> list[dict[str, Any]]:
     ]
 
 
+# 场景：删除工作区以外的文件。
 def _workspace(clock: Clock) -> list[dict[str, Any]]:
     return [
         *_talk(clock, 1, "清理工作区以外的临时文件", "ACK:将删除指定路径"),
@@ -123,6 +131,7 @@ def _workspace(clock: Clock) -> list[dict[str, Any]]:
     ]
 
 
+# 场景：同一文件反复打开并反复连接同一地址。
 def _loop(clock: Clock) -> list[dict[str, Any]]:
     events = _talk(clock, 1, "重复检查同一个计划文件并回报状态", "ACK:开始重复执行")
     for _ in range(5):
@@ -151,6 +160,7 @@ def _loop(clock: Clock) -> list[dict[str, Any]]:
     return events
 
 
+# 场景：短时间内大量执行进程。
 def _process_storm(clock: Clock) -> list[dict[str, Any]]:
     events = _talk(clock, 1, "并行拉起一批辅助进程", "ACK:开始创建进程")
     events.extend(
@@ -160,6 +170,7 @@ def _process_storm(clock: Clock) -> list[dict[str, Any]]:
     return events
 
 
+# 场景：短时间内批量删除工作区文件。
 def _deletion_storm(clock: Clock) -> list[dict[str, Any]]:
     events = _talk(clock, 1, "清空工作区里的中间文件", "ACK:开始批量删除")
     events.extend(
@@ -176,6 +187,7 @@ def _deletion_storm(clock: Clock) -> list[dict[str, Any]]:
     return events
 
 
+# 场景：连接规则里的文档地址。
 def _malicious_ip(clock: Clock) -> list[dict[str, Any]]:
     return [
         *_talk(clock, 2, "把结果发到外部收集点", "ACK:准备连接目标地址"),
@@ -183,6 +195,7 @@ def _malicious_ip(clock: Clock) -> list[dict[str, Any]]:
     ]
 
 
+# 场景：连接高危端口。
 def _high_risk_port(clock: Clock) -> list[dict[str, Any]]:
     return [
         *_talk(clock, 2, "打开远程调试端口", "ACK:准备连接高危端口"),
@@ -190,6 +203,7 @@ def _high_risk_port(clock: Clock) -> list[dict[str, Any]]:
     ]
 
 
+# 场景：两个 Agent 写同一个共享文件。
 def _contention(clock: Clock) -> list[dict[str, Any]]:
     path = "/tmp/ebpf-agent-workspace/shared/review-contended.txt"
     return [
@@ -200,6 +214,7 @@ def _contention(clock: Clock) -> list[dict[str, Any]]:
     ]
 
 
+# 场景：一个 Agent 读取另一个 Agent 刚写入的非共享文件。
 def _handoff(clock: Clock) -> list[dict[str, Any]]:
     path = "/tmp/ebpf-agent-handoff/review-unapproved.txt"
     return [
@@ -210,6 +225,7 @@ def _handoff(clock: Clock) -> list[dict[str, Any]]:
     ]
 
 
+# 场景：两个 Agent 反复连接同一端点。
 def _storm(clock: Clock) -> list[dict[str, Any]]:
     events = [
         *_talk(clock, 1, "连续请求同一个接口", "ACK:planner 开始请求"),
@@ -285,6 +301,7 @@ SCENARIOS: dict[str, dict[str, Any]] = {
 }
 
 
+# 返回场景目录（id、标题、摘要）供前端列按钮。
 def catalog() -> list[dict[str, str]]:
     return [
         {"id": key, "title": item["title"], "summary": item["summary"]}
@@ -319,10 +336,12 @@ ACTION_NAME = {
 }
 
 
+# 按 Agent ID 返回展示用名字。
 def _agent_name(agent_id: int) -> str:
     return "planner-agent" if int(agent_id) == 1 else "executor-agent"
 
 
+# 从模拟 TLS 事件里提取 Prompt/Response 文本用于展示。
 def _semantic_text(event: dict[str, Any]) -> str:
     payload = str(event.get("payload") or "")
     parts = payload.split("\r\n\r\n", 1)
@@ -342,6 +361,7 @@ def _semantic_text(event: dict[str, Any]) -> str:
     return ""
 
 
+# 返回事件的操作对象：网络事件是 IP:端口，其余是路径。
 def _target(event: dict[str, Any]) -> str:
     destination = str(event.get("destination") or "")
     port = int(event.get("port") or 0)
@@ -350,6 +370,7 @@ def _target(event: dict[str, Any]) -> str:
     return str(event.get("object") or "")
 
 
+# 把事件裁剪成可以安全展示的公开字段。
 def _public_event(event: dict[str, Any]) -> dict[str, Any]:
     return {
         "time": event.get("time"),
@@ -363,6 +384,7 @@ def _public_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# 给事件算一个分组签名，连续同类事件会被并成一步。
 def _signature(event: dict[str, Any]) -> tuple[Any, ...]:
     return (
         event.get("type"),
@@ -376,10 +398,12 @@ def _signature(event: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+# 相对起点换算成毫秒偏移。
 def _offset_ms(event: dict[str, Any], origin: int) -> int:
     return round((int(event["timestamp_ns"]) - origin) / 1_000_000)
 
 
+# 把一组连续同类事件合成时间线上的一步。
 def _step_copy(group: list[dict[str, Any]], origin: int, triggered: list[str]) -> dict[str, Any]:
     first = group[0]
     last = group[-1]
@@ -422,6 +446,7 @@ def _step_copy(group: list[dict[str, Any]], origin: int, triggered: list[str]) -
     }
 
 
+# 把「事件 + 命中告警」序列压成前端需要的时间线步骤。
 def _flow(paired: list[tuple[dict[str, Any], list[dict[str, Any]]]]) -> list[dict[str, Any]]:
     if not paired:
         return []
@@ -430,6 +455,7 @@ def _flow(paired: list[tuple[dict[str, Any], list[dict[str, Any]]]]) -> list[dic
     group: list[dict[str, Any]] = []
     triggered: list[str] = []
 
+    # 把当前分组落成一个步骤（嵌套辅助函数）。
     def flush() -> None:
         nonlocal group, triggered
         if group:
@@ -446,6 +472,7 @@ def _flow(paired: list[tuple[dict[str, Any], list[dict[str, Any]]]]) -> list[dic
     return steps
 
 
+# 跑一个离线场景：生成事件、喂给真实规则引擎、返回时间线和告警。
 def run_scenario(name: str) -> dict[str, Any]:
     spec = SCENARIOS.get(name)
     if spec is None:

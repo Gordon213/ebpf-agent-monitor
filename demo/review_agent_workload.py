@@ -19,6 +19,7 @@ HANDOFF = Path("/tmp/ebpf-agent-handoff")
 PROTECTED = Path("/tmp/ebpf-agent-protected/review-secret.txt")
 
 
+# 通过本地 HTTPS 发一条 Prompt 并读回 Response，返回响应文本。
 def tls_exchange(port: int, prompt: str) -> str:
     context = ssl.create_default_context()
     context.check_hostname = False
@@ -53,6 +54,7 @@ def tls_exchange(port: int, prompt: str) -> str:
     return str(document.get("response") or "") if isinstance(document, dict) else ""
 
 
+# 向本地无效端口发起一次连接尝试（触发 connect 事件）。
 def connect_once() -> None:
     connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     connection.settimeout(0.1)
@@ -64,6 +66,7 @@ def connect_once() -> None:
         connection.close()
 
 
+# 轮询等待某个文件出现，超时抛错。
 def wait_for(path: Path, timeout: float = 3.0) -> None:
     deadline = time.monotonic() + timeout
     while not path.exists() and time.monotonic() < deadline:
@@ -72,6 +75,7 @@ def wait_for(path: Path, timeout: float = 3.0) -> None:
         raise RuntimeError(f"timed out waiting for {path}")
 
 
+# 演示 Agent 入口：准备目录、打印 ready，按角色执行动作序列。
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--agent-id", type=int, required=True)

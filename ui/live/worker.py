@@ -23,11 +23,13 @@ from ui.live.protocol import encode, lines  # noqa: E402
 TLS_CAPTURE_CHUNK = 256
 
 
+# 取当前单调时钟纳秒，作为操作起止时间。
 def now_ns() -> int:
     return time.monotonic_ns()
 
 
 class Worker:
+    # 初始化 worker：预加载 TLS 栈，让 libssl 进入 /proc/PID/maps 以便 uprobe 挂载。
     def __init__(
         self, agent_id: int, tls_port: int, tls_certificate: Path, connection: socket.socket
     ) -> None:
@@ -40,10 +42,12 @@ class Worker:
         self.context.check_hostname = False
         self.context.verify_mode = ssl.CERT_NONE
 
+    # 把一条带 Agent/PID 的消息编码后发给 driver。
     def emit(self, kind: str, message: dict) -> None:
         payload = {"kind": kind, "agent_id": self.agent_id, "pid": os.getpid(), **message}
         self.connection.sendall(encode(payload))
 
+    # 执行一次本地 HTTPS Prompt/Response 往返。
     def tls_exchange(self, prompt: str) -> dict:
         body = json.dumps(
             {"messages": [{"role": "user", "content": prompt}]},
@@ -78,6 +82,7 @@ class Worker:
             reply = str(document.get("response") or "")
         return {"prompt": prompt, "response": reply}
 
+    # 真实打开（可选写入）文件，返回系统调用返回值。
     def open_file(self, path: str, write: bool) -> tuple[int, str]:
         flag = os.O_RDWR | os.O_CREAT if write else os.O_RDONLY
         try:
@@ -91,6 +96,7 @@ class Worker:
             os.close(descriptor)
         return 0, "ok"
 
+    # 真实删除文件，返回系统调用返回值。
     def delete_file(self, path: str) -> tuple[int, str]:
         try:
             os.unlink(path)
@@ -98,6 +104,7 @@ class Worker:
             return -abs(error.errno or 1), error.strerror or "error"
         return 0, "ok"
 
+    # 真实发起 TCP 连接尝试，返回系统调用返回值。
     def connect(self, destination: str, port: int) -> tuple[int, str]:
         connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         connection.settimeout(0.2)
@@ -109,6 +116,7 @@ class Worker:
             connection.close()
         return 0, "ok"
 
+    # 真实执行一个程序，返回退出码。
     def run_exec(self, argv: list[str]) -> tuple[int, str]:
         try:
             completed = subprocess.run(
@@ -122,6 +130,7 @@ class Worker:
             return -1, str(error)
         return int(completed.returncode), "ok"
 
+    # 执行一条操作指令并把实际结果回报给 driver。
     def run(self, operation: dict) -> None:
         kind = str(operation.get("op") or "")
         started = now_ns()
@@ -209,6 +218,7 @@ class Worker:
             )
 
 
+# 入口：连上 driver 的 socket，声明就绪，然后循环处理指令。
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--agent-id", type=int, required=True)

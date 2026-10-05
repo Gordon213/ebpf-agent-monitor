@@ -19,9 +19,11 @@ EXPECTED = {
 
 
 class ScenarioTest(unittest.TestCase):
+# 场景目录要列全 11 个触发器，且每个都有标题和摘要。
     def test_catalog_lists_every_trigger(self):
         self.assertEqual([item["id"] for item in catalog()], list(EXPECTED))
 
+# 每个触发器都要能跑出对应告警和非空 Prompt。
     def test_each_trigger_produces_its_alert_and_prompt(self):
         for name, anomaly in EXPECTED.items():
             with self.subTest(name=name):

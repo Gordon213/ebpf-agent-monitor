@@ -27,9 +27,11 @@ PROMPTS: dict[str, str] = {
 }
 
 
+# 按场景名返回执行计划：哪些 Agent、各自做什么操作、发什么 Prompt。
 def plan(name: str) -> dict[str, Any]:
     """Return {agent_id: [operations]} plus the TLS exchanges to send first."""
 
+# 取某个 Agent 的操作列表（嵌套辅助函数）。
     def ops(agent_id: int) -> list[dict[str, Any]]:
         return PLANS[name][agent_id]
 
@@ -45,6 +47,7 @@ def plan(name: str) -> dict[str, Any]:
     }
 
 
+# 取某个 Agent 的工作区目录。
 def _workspace(agent_id: int) -> Path:
     return WORKSPACE_ROOT / f"agent-{agent_id}"
 
@@ -114,9 +117,11 @@ PLANS: dict[str, dict[int, list[dict[str, Any]]]] = {
 }
 
 
+# 准备演示要用的无害文件：工作区、共享目录、受保护文件和待删除文件。
 def prepare() -> None:
     """Create the harmless files and directories a plan expects."""
 
+# 写一个种子文件；写不进去时跳过（例如文件属于 root 但内容已存在）。
     def seed(path: Path, text: str) -> None:
         # A root-run earlier test can leave a file owned by root; that is fine
         # as long as the content is already there, so never fail on permissions.

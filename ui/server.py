@@ -32,11 +32,13 @@ LIVE_HINT = "sudo -v && python3 ui/server.py"
 class LiveError(RuntimeError):
     """A live-run failure that may carry a fix-it hint for the console."""
 
+    # 构造异常对象：保存消息和可展示的修复提示。
     def __init__(self, message: str, hint: str = "") -> None:
         super().__init__(message)
         self.hint = hint
 
 
+# 检查实时采集是否可用：采集器已编译且 sudo 凭证仍有效。
 def live_status() -> dict:
     """Report whether a live run can start right now."""
 
@@ -57,6 +59,7 @@ def live_status() -> dict:
     return {"available": True, "reason": ""}
 
 
+# 以 sudo 调起 ui/live/driver.py 跑一次真实采集，并解析它输出的结果 JSON。
 def run_live_scenario(name: str) -> dict:
     """Run the real eBPF capture pipeline for one trigger and return its timeline."""
 
@@ -100,6 +103,7 @@ def run_live_scenario(name: str) -> dict:
     raise LiveError(message or completed.stderr.strip() or "实时采集失败")
 
 
+# 读一份评审报告 JSON；文件不存在时返回 None。
 def load_json(path: Path) -> dict | None:
     if not path.is_file():
         return None
@@ -108,6 +112,7 @@ def load_json(path: Path) -> dict | None:
     return document if isinstance(document, dict) else None
 
 
+# 把某份评审报告裁剪成前端需要的视图（结论、检查项、告警、事件样例）。
 def review_view(key: str, path: Path) -> dict:
     document = load_json(path)
     if document is None:
@@ -141,6 +146,7 @@ def review_view(key: str, path: Path) -> dict:
     }
 
 
+# 汇总性能报告的关键指标，供“性能”页使用。
 def performance_view() -> dict:
     document = load_json(PERFORMANCE)
     if document is None:
@@ -166,6 +172,7 @@ def performance_view() -> dict:
     }
 
 
+# 组装总览接口的返回：三份评审视图 + 性能视图。
 def showcase_payload() -> dict:
     return {
         "reviews": [review_view(key, path) for key, path in REVIEWS.items()],
@@ -173,10 +180,13 @@ def showcase_payload() -> dict:
     }
 
 
+# HTTP 处理器：静态文件走 ui/ 目录，API 走 do_GET / do_POST。
 class DashboardHandler(SimpleHTTPRequestHandler):
+    # 把静态文件根目录固定为 ui/。
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(UI_DIR), **kwargs)
 
+# 统一输出 JSON 响应，带 no-store 防止页面读到旧报告。
     def _json(self, status: int, payload: dict | list) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -186,6 +196,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+# 处理 POST：实时采集（/api/live/scenarios/）与离线场景（/api/scenarios/）。
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)
         if length:
@@ -220,6 +231,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             return
         self._json(200, payload)
 
+# 处理 GET：实时状态、场景清单、总览数据，其余按静态文件返回。
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/api/live/status":
@@ -235,10 +247,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.path = "/index.html"
         super().do_GET()
 
+# 把访问日志缩写成带 [ui] 前缀的一行。
     def log_message(self, format: str, *args) -> None:
         print(f"[ui] {self.address_string()} {format % args}")
 
 
+# 程序入口：解析监听地址/端口，启动 sudo 续期线程，然后开始服务。
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")

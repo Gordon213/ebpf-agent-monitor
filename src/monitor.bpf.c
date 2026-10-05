@@ -85,6 +85,7 @@ struct {
     __type(value, struct pending_tls);
 } pending_tls_calls SEC(".maps");
 
+/* 读取当前任务的 PID/TGID：优先用调用者指定的 pid namespace，缺省用内核全局 ID。 */
 static __always_inline void current_ns_ids(struct ns_ids *ids)
 {
     struct bpf_pidns_info info = {};
@@ -101,7 +102,7 @@ static __always_inline void current_ns_ids(struct ns_ids *ids)
     ids->tid = (__u32)pid_tgid;
 }
 
-/* Pid number of this task in its innermost pid namespace. */
+/* 取某个 task 在其最内层 pid namespace 里的 PID（CO-RE 只读前 4 层）。 */
 static __always_inline __u32 task_namespace_pid(struct task_struct *task)
 {
     struct pid *pid_struct;
@@ -124,6 +125,7 @@ static __always_inline __u32 task_namespace_pid(struct task_struct *task)
     return 0;
 }
 
+/* 取某个 task 的线程组 ID：先找到线程组 leader，再按它所在 namespace 换算。 */
 static __always_inline __u32 task_namespace_tgid(struct task_struct *task)
 {
     struct task_struct *leader;
@@ -134,6 +136,7 @@ static __always_inline __u32 task_namespace_tgid(struct task_struct *task)
     return task_namespace_pid(leader ? leader : task);
 }
 
+/* 查 tracked_tgids：当前进程属于哪个被监测 Agent，未注册返回 0。 */
 static __always_inline __u32 current_agent_id(void)
 {
     struct ns_ids self = {};
@@ -144,6 +147,7 @@ static __always_inline __u32 current_agent_id(void)
     return agent_id ? *agent_id : 0;
 }
 
+/* Ring Buffer 空间不足时给本 CPU 的丢弃计数加一，不阻塞目标进程。 */
 static __always_inline void count_drop(void)
 {
     __u32 key = 0;
@@ -153,6 +157,7 @@ static __always_inline void count_drop(void)
         *value += 1;
 }
 
+/* 填充事件公共头：时间戳、Agent、PID/TID/PPID、UID/GID、进程名。 */
 static __always_inline void initialize_event(struct event *event, __u32 type,
                                              __u32 agent_id)
 {
@@ -181,6 +186,7 @@ static __always_inline void initialize_event(struct event *event, __u32 type,
     bpf_get_current_comm(event->comm, sizeof(event->comm));
 }
 
+/* 预留一个普通事件槽位并填好公共字段；空间不足时计数丢弃并返回空。 */
 static __always_inline struct event *new_event(__u32 type, __u32 agent_id)
 {
     struct event *event;
@@ -194,6 +200,7 @@ static __always_inline struct event *new_event(__u32 type, __u32 agent_id)
     return event;
 }
 
+/* 预留一个带明文缓冲区的大事件槽位，TLS 事件专用，避免普通事件多拷贝 256 字节。 */
 static __always_inline struct event *new_tls_event(__u32 type, __u32 agent_id)
 {
     struct event *event;
@@ -208,6 +215,7 @@ static __always_inline struct event *new_tls_event(__u32 type, __u32 agent_id)
     return event;
 }
 
+/* 文件类系统调用入口：把 path/dirfd/flags 暂存到 pending_files，等出口补上返回值。 */
 static __always_inline int remember_file(struct trace_event_raw_sys_enter *ctx,
                                          __u32 type, __s32 dirfd,
                                          const char *path, __u32 flags)
@@ -227,6 +235,7 @@ static __always_inline int remember_file(struct trace_event_raw_sys_enter *ctx,
     return 0;
 }
 
+/* 文件类系统调用出口：取出暂存参数并结合返回值提交完整事件，然后清理 pending。 */
 static __always_inline int submit_file_result(struct trace_event_raw_sys_exit *ctx)
 {
     __u64 key = bpf_get_current_pid_tgid();
@@ -257,6 +266,7 @@ cleanup:
     return 0;
 }
 
+/* fork 事件：子进程继承父进程的 agent_id 并登记进 tracked_tgids，同时发一条 fork 事件。 */
 SEC("raw_tracepoint/sched_process_fork")
 int handle_fork(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -283,6 +293,7 @@ int handle_fork(struct bpf_raw_tracepoint_args *ctx)
     return 0;
 }
 
+/* exec 事件：记录被执行的程序路径。 */
 SEC("tracepoint/sched/sched_process_exec")
 int handle_exec(struct trace_event_raw_sched_process_exec *ctx)
 {
@@ -305,6 +316,7 @@ int handle_exec(struct trace_event_raw_sched_process_exec *ctx)
     return 0;
 }
 
+/* exit 事件：发退出事件；线程组主线程退出时把该 tgid 从 tracked_tgids 清理掉。 */
 SEC("tracepoint/sched/sched_process_exit")
 int handle_exit(struct trace_event_raw_sched_process_template *ctx)
 {
@@ -326,6 +338,7 @@ int handle_exit(struct trace_event_raw_sched_process_template *ctx)
     return 0;
 }
 
+/* openat 入口：暂存目录 fd、路径和打开标志。 */
 SEC("tracepoint/syscalls/sys_enter_openat")
 int handle_openat_enter(struct trace_event_raw_sys_enter *ctx)
 {
@@ -333,12 +346,14 @@ int handle_openat_enter(struct trace_event_raw_sys_enter *ctx)
                          (const char *)ctx->args[1], (__u32)ctx->args[2]);
 }
 
+/* openat 出口：提交打开文件事件。 */
 SEC("tracepoint/syscalls/sys_exit_openat")
 int handle_openat_exit(struct trace_event_raw_sys_exit *ctx)
 {
     return submit_file_result(ctx);
 }
 
+/* unlink 入口：暂存待删除路径。 */
 SEC("tracepoint/syscalls/sys_enter_unlink")
 int handle_unlink_enter(struct trace_event_raw_sys_enter *ctx)
 {
@@ -346,12 +361,14 @@ int handle_unlink_enter(struct trace_event_raw_sys_enter *ctx)
                          (const char *)ctx->args[0], 0);
 }
 
+/* unlink 出口：提交删除文件事件。 */
 SEC("tracepoint/syscalls/sys_exit_unlink")
 int handle_unlink_exit(struct trace_event_raw_sys_exit *ctx)
 {
     return submit_file_result(ctx);
 }
 
+/* unlinkat 入口：暂存目录 fd、路径和标志。 */
 SEC("tracepoint/syscalls/sys_enter_unlinkat")
 int handle_unlinkat_enter(struct trace_event_raw_sys_enter *ctx)
 {
@@ -359,12 +376,14 @@ int handle_unlinkat_enter(struct trace_event_raw_sys_enter *ctx)
                          (const char *)ctx->args[1], (__u32)ctx->args[2]);
 }
 
+/* unlinkat 出口：提交按目录删除事件。 */
 SEC("tracepoint/syscalls/sys_exit_unlinkat")
 int handle_unlinkat_exit(struct trace_event_raw_sys_exit *ctx)
 {
     return submit_file_result(ctx);
 }
 
+/* rmdir 入口：暂存待删除目录路径。 */
 SEC("tracepoint/syscalls/sys_enter_rmdir")
 int handle_rmdir_enter(struct trace_event_raw_sys_enter *ctx)
 {
@@ -372,12 +391,14 @@ int handle_rmdir_enter(struct trace_event_raw_sys_enter *ctx)
                          (const char *)ctx->args[0], 0);
 }
 
+/* rmdir 出口：提交删除目录事件。 */
 SEC("tracepoint/syscalls/sys_exit_rmdir")
 int handle_rmdir_exit(struct trace_event_raw_sys_exit *ctx)
 {
     return submit_file_result(ctx);
 }
 
+/* connect 入口：解析 IPv4/IPv6 目标地址与端口并暂存。 */
 SEC("tracepoint/syscalls/sys_enter_connect")
 int handle_connect_enter(struct trace_event_raw_sys_enter *ctx)
 {
@@ -412,6 +433,7 @@ int handle_connect_enter(struct trace_event_raw_sys_enter *ctx)
     return 0;
 }
 
+/* connect 出口：结合返回值提交连接事件（失败尝试也保留）。 */
 SEC("tracepoint/syscalls/sys_exit_connect")
 int handle_connect_exit(struct trace_event_raw_sys_exit *ctx)
 {
@@ -443,6 +465,7 @@ cleanup:
     return 0;
 }
 
+/* OpenSSL 调用入口：按方向（读/写）暂存缓冲区、请求长度和 _ex 的实际长度指针。 */
 static __always_inline int remember_tls(struct pt_regs *ctx, __u8 direction,
                                         __u8 extended_api)
 {
@@ -464,6 +487,7 @@ static __always_inline int remember_tls(struct pt_regs *ctx, __u8 direction,
     return 0;
 }
 
+/* OpenSSL 调用出口：按实际字节数截取明文并提交 TLS 事件，超过 256 字节标记截断。 */
 static __always_inline int submit_tls(struct pt_regs *ctx)
 {
     __u64 key = bpf_get_current_pid_tgid();
@@ -520,48 +544,56 @@ cleanup:
     return 0;
 }
 
+/* SSL_read 入口探针：记录用户缓冲区，等待返回。 */
 SEC("uprobe")
 int handle_ssl_read_enter(struct pt_regs *ctx)
 {
     return remember_tls(ctx, 0, 0);
 }
 
+/* SSL_read 返回探针：按真实读取长度提交 HTTPS 响应明文事件。 */
 SEC("uretprobe")
 int handle_ssl_read_exit(struct pt_regs *ctx)
 {
     return submit_tls(ctx);
 }
 
+/* SSL_write 入口探针：记录待发送缓冲区，等待返回。 */
 SEC("uprobe")
 int handle_ssl_write_enter(struct pt_regs *ctx)
 {
     return remember_tls(ctx, 1, 0);
 }
 
+/* SSL_write 返回探针：按真实发送长度提交 HTTPS 请求明文事件。 */
 SEC("uretprobe")
 int handle_ssl_write_exit(struct pt_regs *ctx)
 {
     return submit_tls(ctx);
 }
 
+/* SSL_read_ex 入口探针：记录缓冲区和实际长度出参指针。 */
 SEC("uprobe")
 int handle_ssl_read_ex_enter(struct pt_regs *ctx)
 {
     return remember_tls(ctx, 0, 1);
 }
 
+/* SSL_read_ex 返回探针：只有返回成功时按实际长度提交响应明文事件。 */
 SEC("uretprobe")
 int handle_ssl_read_ex_exit(struct pt_regs *ctx)
 {
     return submit_tls(ctx);
 }
 
+/* SSL_write_ex 入口探针：记录缓冲区和实际长度出参指针。 */
 SEC("uprobe")
 int handle_ssl_write_ex_enter(struct pt_regs *ctx)
 {
     return remember_tls(ctx, 1, 1);
 }
 
+/* SSL_write_ex 返回探针：只有返回成功时按实际长度提交请求明文事件。 */
 SEC("uretprobe")
 int handle_ssl_write_ex_exit(struct pt_regs *ctx)
 {

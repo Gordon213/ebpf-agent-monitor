@@ -34,12 +34,14 @@ PROFILE_DEFAULTS = {
 }
 
 
+# 按给定分位取排序后的样本值（用于 95% 上界）。
 def percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     index = min(len(ordered) - 1, max(0, round((len(ordered) - 1) * fraction)))
     return ordered[index]
 
 
+# 用固定随机种子的 bootstrap 重采样估计中位数的单侧 95% 上界。
 def bootstrap_median_upper(values: list[float], samples: int = 5000) -> float:
     generator = random.Random(32)
     medians = [
@@ -48,6 +50,7 @@ def bootstrap_median_upper(values: list[float], samples: int = 5000) -> float:
     return percentile(medians, 0.95)
 
 
+# 读负载进程的 READY 行并返回它的 PID。
 def read_ready(process: subprocess.Popen[str]) -> int:
     assert process.stdout is not None
     line = process.stdout.readline().strip()
@@ -57,7 +60,9 @@ def read_ready(process: subprocess.Popen[str]) -> int:
     return int(match.group(1))
 
 
+# 返回一个把当前进程绑定到指定 CPU 的回调；cpu 为空时不绑定。
 def affinity(cpu: int | None):
+    # 把当前进程绑定到指定 CPU（若指定了）。
     def apply() -> None:
         if cpu is not None:
             os.sched_setaffinity(0, {cpu})
@@ -65,6 +70,7 @@ def affinity(cpu: int | None):
     return apply
 
 
+# 跑一次基线或监控试验，返回耗时和采集健康度（收到/丢弃/非法 ABI）。
 def run_trial(
     scenario: str,
     operations: int,
@@ -134,6 +140,7 @@ def run_trial(
     return result
 
 
+# 对三类负载各做多组交替配对试验，汇总中位数、上界和通过结论。
 def evaluate(
     iterations: int,
     profile: str,
@@ -202,6 +209,7 @@ def evaluate(
     return report
 
 
+# 把性能报告渲染成 Markdown 表格。
 def markdown(report: dict[str, Any]) -> str:
     rows = []
     for name, result in report["scenarios"].items():
@@ -248,6 +256,7 @@ def markdown(report: dict[str, Any]) -> str:
     )
 
 
+# 入口：解析参数、跑评测、写 JSON 和 Markdown 报告。
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--iterations", type=int, default=10)

@@ -56,16 +56,19 @@ STEP_TITLE = {
 }
 
 
+# 取当前单调时钟纳秒，作为时间线基准。
 def now_ns() -> int:
     return time.monotonic_ns()
 
 
+# 让内核分配一个空闲本地端口并返回。
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         return int(probe.getsockname()[1])
 
 
+# 生成一次采集用的临时自签证书。
 def generate_certificate(directory: Path) -> tuple[Path, Path]:
     certificate = directory / "live-certificate.pem"
     private_key = directory / "live-key.pem"
@@ -85,6 +88,7 @@ def generate_certificate(directory: Path) -> tuple[Path, Path]:
     return certificate, private_key
 
 
+# 停止并回收子进程；不响应就强杀。
 def stop_process(
     process: subprocess.Popen, timeout: float = 3.0, stop_signal: int = signal.SIGTERM
 ) -> None:
@@ -101,6 +105,7 @@ def stop_process(
         process.wait(timeout=3)
 
 
+# 关闭子进程的三个标准管道，吞掉已关闭的错误。
 def close_pipes(process: subprocess.Popen) -> None:
     for stream in (process.stdin, process.stdout, process.stderr):
         if stream is not None:
@@ -110,6 +115,7 @@ def close_pipes(process: subprocess.Popen) -> None:
                 pass
 
 
+# 带超时地读子进程启动行，超时抛错以便进入清理流程。
 def startup_line(process: subprocess.Popen, timeout: float = 10.0) -> str:
     """Bound the TLS server handshake so startup failures reach cleanup."""
     assert process.stdout is not None
@@ -125,6 +131,7 @@ def startup_line(process: subprocess.Popen, timeout: float = 10.0) -> str:
 
 
 class WorkerConnection:
+    # 包装一个 worker：记录进程/连接，起后台读取线程。
     def __init__(self, agent_id: int, process: subprocess.Popen, connection: socket.socket) -> None:
         self.agent_id = agent_id
         self.process = process
@@ -136,6 +143,7 @@ class WorkerConnection:
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
+    # 后台读 worker 消息并放进队列，断开时置位事件。
     def _read(self) -> None:
         try:
             for item in lines(self.stream):
@@ -146,9 +154,11 @@ class WorkerConnection:
         finally:
             self.disconnected.set()
 
+    # 给 worker 发送一条命令。
     def send(self, message: dict[str, Any]) -> None:
         self.connection.sendall(encode(message))
 
+    # 等待 worker 的某类消息，遇到 error 立即抛错，断开也会立即失败。
     def wait_for(self, kind: str, timeout: float = 30.0) -> list[dict[str, Any]]:
         deadline = time.monotonic() + timeout
         collected: list[dict[str, Any]] = []
@@ -167,6 +177,7 @@ class WorkerConnection:
             self.disconnected.wait(0.02)
         raise TimeoutError(f"worker {self.agent_id} did not report {kind}")
 
+    # 关闭与 worker 的连接并回收读取线程。
     def close(self) -> None:
         try:
             self.connection.shutdown(socket.SHUT_RDWR)
@@ -180,6 +191,7 @@ class WorkerConnection:
 class Collector:
     """Owns the collector and analyzer subprocesses of one live run."""
 
+    # 构造一次采集：起采集器和分析器，并启动转发与读取线程。
     def __init__(self, agent_pids: dict[int, int]) -> None:
         self.alerts: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
@@ -224,6 +236,7 @@ class Collector:
         ):
             reader.start()
 
+    # 转发线程：把采集器事件转给分析器 stdin，同时记录原始事件。
     def _forward(self) -> None:
         assert self.collector.stdout is not None and self.analyzer.stdin is not None
         try:
@@ -247,6 +260,7 @@ class Collector:
             except (BrokenPipeError, OSError, ValueError):
                 pass
 
+    # 后台读取分析器 stdout 里的告警。
     def _read_alerts(self) -> None:
         assert self.analyzer.stdout is not None
         for item in lines(self.analyzer.stdout):
@@ -254,12 +268,14 @@ class Collector:
                 with self.lock:
                     self.alerts.append(item)
 
+    # 后台把子进程 stderr 收进有界队列，供报错时展示。
     def _read_errors(self, stream, target: deque[str]) -> None:
         assert stream is not None
         for line in stream:
             with self.lock:
                 target.append(line.rstrip())
 
+    # 等采集器和分析器报告就绪；任一提前退出立即抛错。
     def wait_started(self, timeout: float = 10.0) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -274,6 +290,7 @@ class Collector:
             time.sleep(0.02)
         raise TimeoutError("collector did not report startup")
 
+    # 结束一次采集：停转发线程，按需强停分析器和采集器并回收。
     def close(self, timeout: float = 8.0) -> None:
         if self._closed:
             return
@@ -295,6 +312,7 @@ class Collector:
             close_pipes(self.collector)
             close_pipes(self.analyzer)
 
+    # 结束一次采集：停子进程、检查退出码、返回收集到的告警。
     def finished_alerts(self, timeout: float = 8.0) -> list[dict[str, Any]]:
         self.close(timeout)
         if self.collector.returncode:
@@ -306,6 +324,7 @@ class Collector:
         with self.lock:
             return list(self.alerts)
 
+    # 返回本次采集到的原始事件副本。
     def captured_events(self) -> list[dict[str, Any]]:
         with self.lock:
             return list(self.events)
@@ -320,6 +339,7 @@ OPERATION_EVENTS = {
 }
 
 
+# 把一条告警匹配到时间线步骤：按 Agent、操作族、对象和执行区间打分。
 def match_step(
     event: dict[str, Any], operations: list[dict[str, Any]]
 ) -> int | None:
@@ -352,6 +372,7 @@ def match_step(
     return best[1] if best is not None else None
 
 
+# 把操作记录和采集事件整理成前端时间线步骤、事件计数和总时长。
 def build_steps(
     name: str,
     operations: list[dict[str, Any]],
@@ -416,6 +437,7 @@ def build_steps(
     return steps, [{"type": key, "count": value} for key, value in sorted(counts.items())], duration
 
 
+# 跑一次完整真实采集：准备负载、起服务/worker/采集器/分析器、下发操作、收集结果。
 def run(name: str) -> dict[str, Any]:
     spec = next((item for item in catalog() if item["id"] == name), None)
     if spec is None:
@@ -530,6 +552,7 @@ def run(name: str) -> dict[str, Any]:
     }
 
 
+# 入口：--check 只报就绪，否则跑一次采集并输出结果 JSON。
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scenario", required=True)
@@ -539,6 +562,7 @@ def main() -> int:
         print(json.dumps({"ready": True, "root": os.geteuid() == 0}, ensure_ascii=False))
         return 0
 
+    # 把 SIGTERM 转成异常，确保退出时走清理流程。
     def interrupt_run(signum, frame):
         raise InterruptedError("live capture interrupted")
 

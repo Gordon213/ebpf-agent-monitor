@@ -43,6 +43,7 @@ SENSITIVE_JSON_KEYS = {
 }
 
 
+# 判断 path 是否等于 root 或真正位于 root 之下（按目录组件比较，不是字符串前缀）。
 def is_within(path: str, root: str) -> bool:
     """Return True only when path is root or a real descendant of root."""
     try:
@@ -53,6 +54,7 @@ def is_within(path: str, root: str) -> bool:
         return False
 
 
+# 把事件时间换算成秒：优先用单调时钟纳秒，退化到 time 字符串，都没有就用当前时钟。
 def event_seconds(event: dict[str, Any]) -> float:
     timestamp_ns = event.get("timestamp_ns")
     if isinstance(timestamp_ns, (int, float)):
@@ -64,15 +66,18 @@ def event_seconds(event: dict[str, Any]) -> float:
         return time.monotonic()
 
 
+# 把 Bearer Token、API Key、Cookie 等凭据替换成 [REDACTED] 后再进入日志。
 def redact_text(text: str) -> str:
     """Remove common credentials before semantic text reaches logs."""
 
+    # 正则替换回调：保留键名，把值部分替换成 [REDACTED]。
     def replacement(match: re.Match[str]) -> str:
         return f"{match.group(1) or match.group(2) or ''}[REDACTED]"
 
     return SECRET_PATTERN.sub(replacement, text)
 
 
+# 把 OpenAI/Anthropic 风格的 content 字段（字符串、列表、对象）统一抽成文本列表。
 def _content_text(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value]
@@ -95,6 +100,7 @@ def _content_text(value: Any) -> list[str]:
     return []
 
 
+# 递归脱敏 JSON：敏感键整体替换，其余字符串走文本脱敏。
 def _redact_json(value: Any) -> Any:
     if isinstance(value, dict):
         return {
@@ -112,6 +118,7 @@ class PathResolver:
     """Resolve syscall paths using the emitting process's cwd or dirfd."""
 
     @staticmethod
+    # 把事件里的相对路径解析成绝对路径：用 /proc/PID/cwd 或目录 fd；解析不了就保留原值。
     def resolve(event: dict[str, Any]) -> str:
         raw_path = str(event.get("object") or "")
         if not raw_path:
@@ -140,12 +147,14 @@ class PathResolver:
 class SemanticExtractor:
     """Bounded TLS plaintext reassembly and common LLM JSON extraction."""
 
+    # 初始化语义提取器：分片缓冲上限和单条文本上限。
     def __init__(self, max_buffer_bytes: int = 262_144, max_text_chars: int = 4096):
         self.max_buffer_bytes = max_buffer_bytes
         self.max_text_chars = max_text_chars
         self.buffers: dict[tuple[int, int, str], bytes] = {}
 
     @staticmethod
+    # 从缓冲区里连续解码完整 JSON 文档，返回文档列表和未消费的剩余部分。
     def _json_documents(text: str) -> tuple[list[Any], str]:
         decoder = json.JSONDecoder()
         documents: list[Any] = []
@@ -166,11 +175,13 @@ class SemanticExtractor:
         return documents, text[consumed_until:]
 
     @staticmethod
+    # 按方向（prompt/response）从 JSON 文档里提取语义文本，覆盖常见 LLM 字段和 choices 结构。
     def _semantic_texts(document: Any, direction: str) -> list[str]:
         prompt_keys = {"prompt", "input", "query", "instruction", "user_prompt"}
         response_keys = {"response", "output", "output_text", "completion", "answer"}
         texts: list[str] = []
 
+        # 递归遍历 JSON，按方向把命中的语义字段收集成文本（嵌套辅助函数）。
         def walk(value: Any, parent_key: str = "") -> None:
             if isinstance(value, dict):
                 role = str(value.get("role") or "").lower()
@@ -204,6 +215,7 @@ class SemanticExtractor:
         return unique
 
     @staticmethod
+    # 把事件 payload 还原成原始字节：兼容 latin-1 标记、旧版采集器格式和已是 Unicode 的重放数据。
     def _payload_bytes(event: dict[str, Any]) -> bytes:
         payload = str(event.get("payload") or "")
         encoding = event.get("payload_encoding")
@@ -222,11 +234,13 @@ class SemanticExtractor:
         return payload.encode("utf-8")
 
     @staticmethod
+    # 判断缓冲区开头是否是 HTTP 请求/响应行（含不完整前缀）。
     def _is_http(buffer: bytes) -> bool:
         prefixes = (b"GET ", b"POST ", b"PUT ", b"PATCH ", b"DELETE ", b"HTTP/")
         return any(buffer.startswith(prefix) or prefix.startswith(buffer) for prefix in prefixes)
 
     @staticmethod
+    # 按 Content-Length 切出一条或多条完整 HTTP 消息体，返回消息体和剩余字节。
     def _http_bodies(buffer: bytes) -> tuple[list[bytes], bytes]:
         bodies: list[bytes] = []
         remaining = buffer
@@ -253,6 +267,7 @@ class SemanticExtractor:
             remaining = remaining[message_length:]
         return bodies, remaining
 
+    # 喂入一个 TLS 事件：按 Agent+PID+方向重组分片，切出完整 HTTP/JSON 文档并生成语义项。
     def feed(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         if event.get("type") not in TLS_EVENTS:
             return []
@@ -311,6 +326,7 @@ class SemanticExtractor:
 class CausalCorrelator:
     """Maintain a bounded per-Agent Prompt/Response timeline."""
 
+    # 初始化因果关联器：时间窗、历史条数和提取器。
     def __init__(self, config: dict[str, Any]):
         settings = config.get("semantic_capture") or {}
         self.window_seconds = float(settings.get("correlation_window_seconds", 30))
@@ -323,12 +339,14 @@ class CausalCorrelator:
             lambda: deque(maxlen=self.max_history)
         )
 
+    # 记录语义项到每个 Agent 的有界历史，是关联 Prompt/Response 的入口。
     def observe(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         semantics = self.extractor.feed(event)
         for semantic in semantics:
             self.history[int(semantic["agent_id"])].append(semantic)
         return semantics
 
+    # 给系统事件找最近的同 Agent Prompt 和其后的 Response，生成因果上下文（证据类型是时间关联）。
     def context(self, event: dict[str, Any]) -> dict[str, Any] | None:
         agent_id = int(event.get("agent_id") or 0)
         now = event_seconds(event)
@@ -360,6 +378,7 @@ class CausalCorrelator:
 class Analyzer:
     """Rule-driven detector with bounded per-Agent and cross-Agent state."""
 
+    # 初始化分析器：路径解析器、语义关联器和各类检测状态。
     def __init__(self, config: dict[str, Any], resolver: PathResolver | None = None):
         self.config = config
         self.resolver = resolver or PathResolver()
@@ -375,6 +394,7 @@ class Analyzer:
         self.last_loop_alert: dict[int, float] = {}
         self.pending_correlations: list[dict[str, Any]] = []
 
+    # 分析器主入口：解析路径、更新语义，依次跑各检测器，附加因果上下文后返回告警列表。
     def process(self, raw_event: dict[str, Any]) -> list[dict[str, Any]]:
         event = dict(raw_event)
         event["normalized_object"] = self.resolver.resolve(event)
@@ -419,14 +439,17 @@ class Analyzer:
                 alert["details"]["causal_evidence"] = context["evidence"]
         return alerts
 
+    # 取走并清空待落盘的关联记录。
     def drain_correlations(self) -> list[dict[str, Any]]:
         correlations, self.pending_correlations = self.pending_correlations, []
         return correlations
 
+    # 按 Agent ID 取配置里的名字和工作区。
     def _agent_config(self, agent_id: int) -> dict[str, Any]:
         agents = self.config.get("agents") or {}
         return agents.get(agent_id) or agents.get(str(agent_id)) or {}
 
+    # 构造一条标准告警记录（含 Agent、PID/TID、操作对象、返回值等字段）。
     def _new_alert(
         self,
         event: dict[str, Any],
@@ -457,6 +480,7 @@ class Analyzer:
             "details": details or {},
         }
 
+    # 冷却判断：同一类别+键在冷却期内不重复告警。
     def _cooldown_ready(self, kind: str, key: str, now: float, cooldown: float) -> bool:
         alert_key = (kind, key)
         if now - self.last_alert.get(alert_key, float("-inf")) < cooldown:
@@ -464,6 +488,7 @@ class Analyzer:
         self.last_alert[alert_key] = now
         return True
 
+    # 检测成功执行的程序是否命中 unexpected_shells（按完整路径或基名匹配）。
     def _detect_shell(self, event: dict[str, Any]) -> dict[str, Any] | None:
         if event.get("type") != "exec":
             return None
@@ -486,6 +511,7 @@ class Analyzer:
             {"executable": executable},
         )
 
+    # 判断路径是否命中 sensitive_paths（支持 glob），命中返回规则原文。
     def _is_sensitive(self, path: str) -> str | None:
         for rule in self.config.get("sensitive_paths") or []:
             rule = os.path.expanduser(str(rule))
@@ -496,6 +522,7 @@ class Analyzer:
                 return rule
         return None
 
+    # 检测成功的文件操作是否触碰敏感路径。
     def _detect_sensitive_file(self, event: dict[str, Any]) -> dict[str, Any] | None:
         if event.get("type") not in FILE_EVENTS or int(event.get("retval", -1)) < 0:
             return None
@@ -511,6 +538,7 @@ class Analyzer:
             {"matched_rule": matched_rule},
         )
 
+    # 检测工作区之外的成功删除。
     def _detect_workspace_delete(self, event: dict[str, Any]) -> dict[str, Any] | None:
         if event.get("type") not in DELETE_EVENTS or int(event.get("retval", -1)) != 0:
             return None
@@ -527,6 +555,7 @@ class Analyzer:
             {"workspace": os.path.realpath(workspace)},
         )
 
+    # 检测恶意目标 IP 和高危端口。
     def _detect_network_risk(self, event: dict[str, Any]) -> dict[str, Any] | None:
         if event.get("type") != "connect":
             return None
@@ -551,11 +580,13 @@ class Analyzer:
         return None
 
     @staticmethod
+    # 把队列里超出时间窗的旧记录从头部弹出。
     def _purge(queue: deque[Any], cutoff: float) -> None:
         while queue and float(queue[0][0]) < cutoff:
             queue.popleft()
 
     @staticmethod
+    # 统计队列里出现次数最多的键，用于循环/风暴判定。
     def _highest_repeat(queue: Iterable[tuple[float, str]]) -> tuple[int, str]:
         counts = Counter(key for _, key in queue if key)
         if not counts:
@@ -563,6 +594,7 @@ class Analyzer:
         key, count = counts.most_common(1)[0]
         return count, key
 
+    # 检测进程事件风暴和批量删除。
     def _detect_resource_abuse(self, event: dict[str, Any]) -> dict[str, Any] | None:
         settings = self.config.get("resource_limits") or {}
         now = event_seconds(event)
@@ -611,6 +643,7 @@ class Analyzer:
         return None
 
     @staticmethod
+    # 把文件事件归类成读或写（按 flags 和事件类型判断）。
     def _file_access(event: dict[str, Any]) -> str:
         if event.get("type") in DELETE_EVENTS:
             return "write"
@@ -619,6 +652,7 @@ class Analyzer:
             return "write"
         return "read"
 
+    # 判断两个 Agent 的资源交换是否被允许（协作名单或共享路径）。
     def _collaboration_allowed(self, first: int, second: int, path: str) -> bool:
         settings = self.config.get("multi_agent") or {}
         pairs = {
@@ -630,6 +664,7 @@ class Analyzer:
             return True
         return any(is_within(path, str(root)) for root in settings.get("shared_paths") or [])
 
+    # 检测多 Agent 写竞争、未授权传递和集体 API 风暴。
     def _detect_multi_agent(self, event: dict[str, Any]) -> dict[str, Any] | None:
         settings = self.config.get("multi_agent") or {}
         if not settings.get("enabled", True):
@@ -714,6 +749,7 @@ class Analyzer:
                 )
         return None
 
+    # 复合死循环检测：文件/网络/进程/Prompt 四类信号里至少两类重复越阈值。
     def _detect_loop(
         self, event: dict[str, Any], semantics: list[dict[str, Any]]
     ) -> dict[str, Any] | None:
@@ -785,11 +821,13 @@ class Analyzer:
 
 
 class JsonlSink:
+    # 初始化分析器：路径解析器、语义关联器和各类检测状态。
     def __init__(self, directory: Path, prefix: str, persist: bool = True):
         self.directory = directory
         self.prefix = prefix
         self.persist = persist
 
+    # 把一条记录按可选 stdout / 落盘方式输出成一行 JSONL。
     def emit(self, item: dict[str, Any], *, stdout: bool = False) -> None:
         line = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
         if stdout:
@@ -803,13 +841,16 @@ class JsonlSink:
 
 
 class AlertSink(JsonlSink):
+    # 初始化分析器：路径解析器、语义关联器和各类检测状态。
     def __init__(self, directory: Path, persist: bool = True):
         super().__init__(directory, "alerts", persist)
 
+    # 告警输出：默认既打 stdout 也落盘。
     def emit(self, item: dict[str, Any], *, stdout: bool = True) -> None:
         super().emit(item, stdout=stdout)
 
 
+# 读取并校验 YAML 配置。
 def load_config(path: Path) -> dict[str, Any]:
     try:
         import yaml
@@ -825,6 +866,7 @@ def load_config(path: Path) -> dict[str, Any]:
     return config
 
 
+# 把文本流逐行解析成事件字典，坏行告警后跳过。
 def event_lines(stream: TextIO) -> Iterable[dict[str, Any]]:
     for line_number, line in enumerate(stream, 1):
         line = line.strip()
@@ -839,6 +881,7 @@ def event_lines(stream: TextIO) -> Iterable[dict[str, Any]]:
             yield event
 
 
+# 命令行入口：读配置、建分析器，从 stdin 或文件消费事件，落盘告警与关联。
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("config/rules.yaml"))

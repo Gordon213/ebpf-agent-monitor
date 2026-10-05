@@ -14,6 +14,7 @@ import tempfile
 import time
 
 
+# 文件负载：对临时文件重复读操作。
 def file_workload(operations: int) -> None:
     with tempfile.TemporaryDirectory(prefix="agent-monitor-perf-") as directory:
         path = Path(directory) / "input.txt"
@@ -23,11 +24,13 @@ def file_workload(operations: int) -> None:
                 stream.read(64)
 
 
+# 进程负载：重复执行 /bin/true。
 def exec_workload(operations: int) -> None:
     for _ in range(operations):
         subprocess.run(["/bin/true"], check=True)
 
 
+# 网络负载：重复向本地无效端口发起连接尝试。
 def network_workload(operations: int) -> None:
     for _ in range(operations):
         connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -40,6 +43,7 @@ def network_workload(operations: int) -> None:
             connection.close()
 
 
+# 固定轮数的 PBKDF2 本地计算，模拟 Agent 规划阶段的 CPU 开销。
 def decision_workload(rounds: int) -> None:
     """Fixed CPU work representing local Agent planning between tool batches."""
     value = b"AgentScope-eBPF deterministic decision workload"
@@ -49,6 +53,7 @@ def decision_workload(rounds: int) -> None:
         )
 
 
+# 入口：打印 READY、等启动延迟、跑对应负载。
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("scenario", choices=("file", "exec", "network"))

@@ -10,6 +10,7 @@ import socket
 import ssl
 
 
+# 按 Content-Length 收全一条 HTTP 消息。
 def receive_http_message(connection: ssl.SSLSocket) -> bytes:
     data = bytearray()
     expected = None
@@ -32,6 +33,7 @@ def receive_http_message(connection: ssl.SSLSocket) -> bytes:
     return bytes(data)
 
 
+# 从请求体里取出 Prompt（messages 或 prompt 字段）。
 def prompt_from_request(request: bytes) -> str:
     _, _, body = request.partition(b"\r\n\r\n")
     try:
@@ -48,6 +50,7 @@ def prompt_from_request(request: bytes) -> str:
     return "unknown prompt"
 
 
+# 入口：起本地 HTTPS 服务，按配置的连接数循环应答。
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, required=True)

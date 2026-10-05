@@ -43,12 +43,14 @@ static unsigned long long received_events;
 static unsigned long long invalid_events;
 static unsigned long long received_by_type[EVENT_TLS_WRITE + 1];
 
+/* SIGINT/SIGTERM 处理函数：只置退出标志，让主循环自然收尾。 */
 static void handle_signal(int signal_number)
 {
     (void)signal_number;
     exiting = 1;
 }
 
+/* libbpf 日志回调：屏蔽 DEBUG 噪音，其余原样输出到 stderr。 */
 static int libbpf_log(enum libbpf_print_level level, const char *format,
                       va_list args)
 {
@@ -57,6 +59,7 @@ static int libbpf_log(enum libbpf_print_level level, const char *format,
     return vfprintf(stderr, format, args);
 }
 
+/* 事件类型编号到可读名字的映射（JSON 和文本输出共用）。 */
 static const char *event_name(__u32 type)
 {
     switch (type) {
@@ -74,6 +77,7 @@ static const char *event_name(__u32 type)
     }
 }
 
+/* 把单调时钟时间戳换算成 UTC 墙上时间字符串，毫秒精度。 */
 static void format_time(__u64 monotonic_ns, char *buffer, size_t size)
 {
     __u64 realtime_ns = realtime_offset_ns + monotonic_ns;
@@ -90,6 +94,7 @@ static void format_time(__u64 monotonic_ns, char *buffer, size_t size)
 
 /* Preserve binary bytes as JSON code points. TLS UTF-8 is decoded after
  * reassembly in the analyzer, since one event can split a multibyte character. */
+/* 把原始二进制字节转成 JSON 字符串内容：控制字符与高位字节用 \u00xx 转义。 */
 static void json_bytes(const char *value, size_t value_length, char *output,
                        size_t output_size)
 {
@@ -131,6 +136,7 @@ static void json_bytes(const char *value, size_t value_length, char *output,
     output[output_index] = '\0';
 }
 
+/* Ring Buffer 每个事件回调：校验事件、累加统计，再按 --json 或文本格式打印。 */
 static int handle_event(void *context, void *data, size_t data_size)
 {
     const struct event *event = data;
@@ -213,6 +219,7 @@ static int handle_event(void *context, void *data, size_t data_size)
     return 0;
 }
 
+/* 打印命令行用法，即 --agent/--openssl/--no-tls/--capture-only/--json。 */
 static void usage(const char *program)
 {
     fprintf(stderr,
@@ -225,6 +232,7 @@ static void usage(const char *program)
             program);
 }
 
+/* 解析十进制无符号 32 位整数，拒绝 0、溢出和多余字符。 */
 static bool parse_u32(const char *text, __u32 *value)
 {
     char *end = NULL;
@@ -238,6 +246,7 @@ static bool parse_u32(const char *text, __u32 *value)
     return true;
 }
 
+/* 解析 --agent 参数的 ID:PID 格式。 */
 static bool parse_agent(const char *text, struct agent_spec *agent)
 {
     const char *separator = strchr(text, ':');
@@ -254,6 +263,7 @@ static bool parse_agent(const char *text, struct agent_spec *agent)
     return parse_u32(id_text, &agent->id) && parse_u32(separator + 1, &agent->pid);
 }
 
+/* 读取 /proc/PID/ns/pid 的 stat，用来判断进程所在 pid namespace。 */
 static bool read_pid_namespace(__u32 pid, struct stat *info)
 {
     char path[64];
@@ -262,6 +272,7 @@ static bool read_pid_namespace(__u32 pid, struct stat *info)
     return stat(path, info) == 0;
 }
 
+/* 把首个 Agent 的 pid namespace 写进 BPF rodata；其余 Agent 不在同一 namespace 时告警。 */
 static void configure_pid_namespace(struct monitor_bpf *skeleton,
                                     const struct agent_spec *agents,
                                     size_t agent_count)
@@ -287,6 +298,7 @@ static void configure_pid_namespace(struct monitor_bpf *skeleton,
     skeleton->rodata->pidns_ino = (__u64)info.st_ino;
 }
 
+/* 检查某个 syscall tracepoint 在 tracefs/debugfs 里是否存在。 */
 static bool tracepoint_exists(const char *name)
 {
     char path[256];
@@ -298,6 +310,7 @@ static bool tracepoint_exists(const char *name)
     return access(path, R_OK) == 0;
 }
 
+/* 成对检查入口/出口 tracepoint；缺任一个就禁用这对程序，其余采集继续。 */
 static void configure_syscall_pair(struct bpf_program *enter_program,
                                    struct bpf_program *exit_program,
                                    const char *syscall_name)
@@ -316,11 +329,13 @@ static void configure_syscall_pair(struct bpf_program *enter_program,
     bpf_program__set_autoload(exit_program, false);
 }
 
+/* 判断路径是否为可读的绝对路径。 */
 static bool path_is_readable(const char *path)
 {
     return path && path[0] == '/' && access(path, R_OK) == 0;
 }
 
+/* 定位 libssl：先查目标进程 /proc/PID/maps，再回退到常见系统路径。 */
 static bool discover_openssl(__u32 pid, char *output, size_t output_size)
 {
     static const char *fallbacks[] = {
@@ -365,6 +380,7 @@ static bool discover_openssl(__u32 pid, char *output, size_t output_size)
     return false;
 }
 
+/* 挂载单个 uprobe/uretprobe；失败只告警不中断，成功返回 0 并输出 link。 */
 static int attach_one_uprobe(struct bpf_program *program, const char *path,
                              const char *symbol, bool return_probe,
                              struct bpf_link **link_output)
@@ -388,6 +404,7 @@ static int attach_one_uprobe(struct bpf_program *program, const char *path,
     return 0;
 }
 
+/* 为 SSL_read/SSL_write/SSL_read_ex/SSL_write_ex 各挂入口+返回探针。 */
 static size_t attach_tls_probes(struct monitor_bpf *skeleton, const char *path,
                                 struct bpf_link **links)
 {
@@ -423,6 +440,7 @@ static size_t attach_tls_probes(struct monitor_bpf *skeleton, const char *path,
     return link_count;
 }
 
+/* 按是否启用 TLS 设置程序：启用时改为手动挂载 uprobe，禁用时整体关掉自动加载。 */
 static void configure_tls_programs(struct monitor_bpf *skeleton, bool enabled)
 {
     struct bpf_program *programs[] = {
@@ -445,6 +463,7 @@ static void configure_tls_programs(struct monitor_bpf *skeleton, bool enabled)
     }
 }
 
+/* 汇总所有 CPU 的 Ring Buffer 丢弃计数。 */
 static unsigned long long dropped_event_count(struct monitor_bpf *skeleton)
 {
     int cpu_count = libbpf_num_possible_cpus();
@@ -467,6 +486,7 @@ static unsigned long long dropped_event_count(struct monitor_bpf *skeleton)
     return total;
 }
 
+/* 程序入口：解析参数、配置并加载 BPF、注册 Agent、挂探针，然后循环消费事件直到退出。 */
 int main(int argc, char **argv)
 {
     static const struct option options[] = {

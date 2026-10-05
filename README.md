@@ -198,7 +198,8 @@ python3 -m user.analyzer \
   或时间淘汰，防止监控系统自身无界增长。
 
 完整架构、关键决策和验收映射见 [docs/DESIGN.md](docs/DESIGN.md) 与
-[docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)。
+[docs/ACCEPTANCE.md](docs/ACCEPTANCE.md);每个程序在干什么、三套 review 的
+调用路径见 [docs/PROGRAMS.md](docs/PROGRAMS.md)。
 
 ## 目录
 
@@ -212,6 +213,6 @@ python3 -m user.analyzer \
 ├── tests/                # 用户态确定性测试
 ├── tools/                # 验收、性能与配置驱动评审演示
 ├── ui/                   # 本地监测台，读取评审报告
-├── docs/                 # 设计、验收与测量报告
+├── docs/                 # 设计、验收、程序清单与测量报告
 └── Makefile
 ```

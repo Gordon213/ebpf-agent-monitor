@@ -65,11 +65,13 @@ EVENT_DESCRIPTIONS = {
 }
 
 
+# 把相对路径解析成相对仓库根目录的绝对路径。
 def root_path(value: str | Path) -> Path:
     path = Path(value)
     return path if path.is_absolute() else ROOT / path
 
 
+# 读取并校验评审配置（必需字段和 kind 取值）。
 def load_config(path: Path) -> dict[str, Any]:
     try:
         import yaml
@@ -88,12 +90,14 @@ def load_config(path: Path) -> dict[str, Any]:
     return config
 
 
+# 确保采集器已编译：跑 make 并检查产物存在。
 def ensure_build() -> None:
     completed = subprocess.run(["make"], cwd=ROOT)
     if completed.returncode or not COLLECTOR.exists():
         raise RuntimeError("collector build failed")
 
 
+# 保证有 sudo 凭证：非 root 时执行 sudo -v 认证一次。
 def ensure_sudo() -> None:
     if os.geteuid() == 0:
         return
@@ -101,20 +105,24 @@ def ensure_sudo() -> None:
         raise RuntimeError("sudo authentication failed")
 
 
+# 给命令加 sudo -n 前缀（已经是 root 就不加）。
 def privileged(command: list[str]) -> list[str]:
     return command if os.geteuid() == 0 else ["sudo", "-n", *command]
 
 
+# 计算文件 SHA-256，用于验证演示前后源文件未被修改。
 def file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# 让内核分配一个空闲本地端口并返回。
 def reserve_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
         reservation.bind(("127.0.0.1", 0))
         return int(reservation.getsockname()[1])
 
 
+# 把采集器 stdout 转给分析器 stdin，同时收集事件和解析错误。
 def event_forwarder(
     source: TextIO,
     destination: TextIO,
@@ -143,6 +151,7 @@ def event_forwarder(
             pass
 
 
+# 把多行文本里的 JSON 行解析成字典列表，坏行跳过。
 def parse_json_lines(text: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for line in text.splitlines():
@@ -155,6 +164,7 @@ def parse_json_lines(text: str) -> list[dict[str, Any]]:
     return items
 
 
+# 从事件里摘出报告需要的字段（并且不含 TLS 明文）。
 def event_summary(event: dict[str, Any]) -> dict[str, Any]:
     summary = {
         key: event.get(key)
@@ -183,6 +193,7 @@ def event_summary(event: dict[str, Any]) -> dict[str, Any]:
     return {"description": summary.pop("description"), **summary}
 
 
+# 给检查项生成人类可读的描述文本。
 def check_description(name: str) -> str:
     if "精确归因到 Agent" in name:
         return "检查异常类型、Agent ID、Prompt 及所需 Response 是否同时精确匹配。"
@@ -193,6 +204,7 @@ def check_description(name: str) -> str:
     return CHECK_DESCRIPTIONS.get(name, "检查该项实际证据是否满足演示配置中的预期。")
 
 
+# 向检查结果列表追加一条带描述的证据记录。
 def add_check(checks: list[dict[str, Any]], name: str, passed: bool, evidence: Any) -> None:
     checks.append(
         {
@@ -204,6 +216,7 @@ def add_check(checks: list[dict[str, Any]], name: str, passed: bool, evidence: A
     )
 
 
+# 给告警补充人类可读描述（按异常类型查表）。
 def describe_alert(alert: dict[str, Any]) -> dict[str, Any]:
     description = ALERT_DESCRIPTIONS.get(
         str(alert.get("anomaly_type") or ""), "展示分析器根据规则生成的一条异常告警。"
@@ -211,6 +224,7 @@ def describe_alert(alert: dict[str, Any]) -> dict[str, Any]:
     return {"description": description, **alert}
 
 
+# 判断一条告警是否满足配置里的期望（异常类型、Agent、Prompt、是否需要 Response）。
 def alert_matches(alert: dict[str, Any], expected: dict[str, Any]) -> bool:
     for key in ("anomaly_type", "agent_id", "causal_prompt"):
         if key in expected and alert.get(key) != expected[key]:
@@ -220,6 +234,7 @@ def alert_matches(alert: dict[str, Any], expected: dict[str, Any]) -> bool:
     return True
 
 
+# 对一次 live 演示做全部验收比对并生成检查项列表。
 def evaluate_live(
     config: dict[str, Any],
     events: list[dict[str, Any]],
@@ -382,6 +397,7 @@ def evaluate_live(
     return checks
 
 
+# 用 openssl 生成演示用的临时自签证书。
 def generate_certificate(directory: Path) -> tuple[Path, Path]:
     certificate = directory / "certificate.pem"
     private_key = directory / "private-key.pem"
@@ -411,6 +427,7 @@ def generate_certificate(directory: Path) -> tuple[Path, Path]:
     return certificate, private_key
 
 
+# 跑一次 live 演示：起 HTTPS 服务、双 Agent、采集器和分析器，收集事件与告警。
 def run_live(config: dict[str, Any]) -> dict[str, Any]:
     runtime = float((config.get("runtime") or {}).get("seconds", 9))
     analyzer_config = root_path(config.get("analyzer_config", "config/rules.yaml"))
@@ -612,6 +629,7 @@ def run_live(config: dict[str, Any]) -> dict[str, Any]:
             raise
 
 
+# 以 root 调起性能评测器，把它的结论复核成评审检查项。
 def run_performance(config: dict[str, Any]) -> dict[str, Any]:
     settings = config.get("performance") or {}
     output_directory = root_path(settings.get("output_dir", "docs/review_reports/performance"))
@@ -704,6 +722,7 @@ def run_performance(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# 把评审报告写到配置指定的 report_path。
 def write_report(config: dict[str, Any], report: dict[str, Any]) -> Path:
     path = root_path(config["report_path"])
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -711,6 +730,7 @@ def write_report(config: dict[str, Any], report: dict[str, Any]) -> Path:
     return path
 
 
+# 在终端打印 PASS/FAIL、事件证据和告警摘要。
 def print_report(config: dict[str, Any], report: dict[str, Any], path: Path) -> None:
     print(f"\n=== {config['title']} ===")
     print(f"评审要点：{config.get('review_point', '')}")
@@ -753,6 +773,7 @@ def print_report(config: dict[str, Any], report: dict[str, Any], path: Path) -> 
     print(f"机器可读证据：{path}")
 
 
+# 入口：加载配置、确保构建与 sudo，逐个跑演示并写报告。
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, action="append")

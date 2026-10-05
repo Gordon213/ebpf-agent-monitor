@@ -6,6 +6,7 @@ from tools.run_review_demo import add_check, alert_matches, describe_alert, even
 
 
 class ReviewDemoTest(unittest.TestCase):
+# 告警配对要求 Agent、Prompt、Response 完全一致，避免因果串线。
     def test_alert_match_requires_exact_agent_prompt_and_response(self) -> None:
         alert = {
             "anomaly_type": "unexpected_shell",
@@ -28,6 +29,7 @@ class ReviewDemoTest(unittest.TestCase):
             alert_matches(alert, {"agent_id": 2, "causal_prompt": "PROMPT_B"})
         )
 
+# 事件摘要里不能出现 TLS 明文，防止报告泄露内容。
     def test_event_summary_never_persists_tls_plaintext(self) -> None:
         summary = event_summary(
             {
@@ -41,6 +43,7 @@ class ReviewDemoTest(unittest.TestCase):
         self.assertEqual(summary["data_len"], 42)
         self.assertIn("HTTPS 请求", summary["description"])
 
+# 报告里的检查项都要带人类可读的描述，便于评审阅读。
     def test_human_readable_descriptions_are_added_to_results(self) -> None:
         checks: list[dict[str, object]] = []
         add_check(checks, "Ring Buffer 无丢失且 ABI 有效", True, {"dropped": 0})
