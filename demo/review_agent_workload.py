@@ -84,20 +84,24 @@ def main() -> int:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--start-delay", type=float, default=2.0)
     parser.add_argument("--loop-count", type=int, default=6)
+    parser.add_argument("--workspace-root", type=Path, default=ROOT)
+    parser.add_argument("--handoff-root", type=Path, default=HANDOFF)
+    parser.add_argument("--protected-file", type=Path, default=PROTECTED)
     args = parser.parse_args()
 
-    workspace = ROOT / f"agent-{args.agent_id}"
+    workspace = args.workspace_root / f"agent-{args.agent_id}"
+    shared = args.workspace_root / "shared"
     workspace.mkdir(parents=True, exist_ok=True)
-    SHARED.mkdir(parents=True, exist_ok=True)
-    HANDOFF.mkdir(parents=True, exist_ok=True)
+    shared.mkdir(parents=True, exist_ok=True)
+    args.handoff_root.mkdir(parents=True, exist_ok=True)
     print(f"REVIEW AGENT {args.agent_id} PID {os.getpid()} role={args.role}", flush=True)
     time.sleep(args.start_delay)
 
     response = tls_exchange(args.port, args.prompt)
     print(f"Agent {args.agent_id} received {response}", flush=True)
 
-    contended = SHARED / "review-contended.txt"
-    handoff = HANDOFF / "review-unapproved.txt"
+    contended = shared / "review-contended.txt"
+    handoff = args.handoff_root / "review-unapproved.txt"
     if args.role == "planner":
         contended.write_text("planner result\n", encoding="utf-8")
         handoff.write_text("planner private result\n", encoding="utf-8")
@@ -110,7 +114,7 @@ def main() -> int:
         time.sleep(0.25)
         contended.write_text("executor result\n", encoding="utf-8")
         handoff.read_text(encoding="utf-8")
-        PROTECTED.read_text(encoding="utf-8")
+        args.protected_file.read_text(encoding="utf-8")
 
     for _ in range(args.loop_count):
         connect_once()

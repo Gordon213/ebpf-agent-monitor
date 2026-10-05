@@ -70,6 +70,26 @@ def affinity(cpu: int | None):
     return apply
 
 
+# 结束并回收单次试验创建的子进程。
+def stop_trial_process(process: subprocess.Popen) -> None:
+    if process.poll() is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=3)
+    for stream in (process.stdin, process.stdout, process.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+
+
 # 跑一次基线或监控试验，返回耗时和采集健康度（收到/丢弃/非法 ABI）。
 def run_trial(
     scenario: str,
@@ -95,49 +115,56 @@ def run_trial(
         text=True,
         preexec_fn=affinity(workload_cpu),
     )
-    pid = read_ready(workload)
     collector: subprocess.Popen[str] | None = None
-    if monitored:
-        collector = subprocess.Popen(
-            [
-                str(COLLECTOR),
-                "--agent",
-                f"9001:{pid}",
-                "--no-tls",
-                "--capture-only",
-            ],
-            cwd=ROOT,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            preexec_fn=affinity(monitor_cpu),
-        )
-        time.sleep(0.15)
-        if collector.poll() is not None:
-            _, stderr = collector.communicate()
-            workload.terminate()
-            raise RuntimeError(f"collector failed before workload start:\n{stderr}")
+    try:
+        pid = read_ready(workload)
+        if monitored:
+            collector = subprocess.Popen(
+                [
+                    str(COLLECTOR),
+                    "--agent",
+                    f"9001:{pid}",
+                    "--no-tls",
+                    "--capture-only",
+                ],
+                cwd=ROOT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                preexec_fn=affinity(monitor_cpu),
+            )
+            time.sleep(0.15)
+            if collector.poll() is not None:
+                _, stderr = collector.communicate()
+                workload.terminate()
+                raise RuntimeError(f"collector failed before workload start:\n{stderr}")
 
-    stdout, stderr = workload.communicate(timeout=180)
-    if workload.returncode:
-        raise RuntimeError(f"workload failed ({workload.returncode}): {stderr}")
-    result_line = stdout.strip().splitlines()[-1]
-    result = json.loads(result_line)
+        stdout, stderr = workload.communicate(timeout=180)
+        if workload.returncode:
+            raise RuntimeError(f"workload failed ({workload.returncode}): {stderr}")
+        result_line = stdout.strip().splitlines()[-1]
+        result = json.loads(result_line)
 
-    if collector:
-        collector.send_signal(signal.SIGINT)
-        _, collector_stderr = collector.communicate(timeout=15)
-        if collector.returncode:
-            raise RuntimeError(f"collector failed ({collector.returncode}):\n{collector_stderr}")
-        match = re.search(r"received=(\d+) dropped=(\d+) invalid=(\d+)", collector_stderr)
-        if not match:
-            raise RuntimeError(f"collector did not report health counters:\n{collector_stderr}")
-        result["received"] = int(match.group(1))
-        result["dropped"] = int(match.group(2))
-        result["invalid"] = int(match.group(3))
-        if result["received"] <= 0 or result["dropped"] != 0 or result["invalid"] != 0:
-            raise RuntimeError(f"invalid capture health: {result}")
-    return result
+        if collector:
+            collector.send_signal(signal.SIGINT)
+            _, collector_stderr = collector.communicate(timeout=15)
+            if collector.returncode:
+                raise RuntimeError(f"collector failed ({collector.returncode}):\n{collector_stderr}")
+            match = re.search(r"received=(\d+) dropped=(\d+) invalid=(\d+)", collector_stderr)
+            if not match:
+                raise RuntimeError(f"collector did not report health counters:\n{collector_stderr}")
+            result["received"] = int(match.group(1))
+            result["dropped"] = int(match.group(2))
+            result["invalid"] = int(match.group(3))
+            if result["received"] <= 0 or result["dropped"] != 0 or result["invalid"] != 0:
+                raise RuntimeError(f"invalid capture health: {result}")
+        return result
+    finally:
+        try:
+            if collector is not None:
+                stop_trial_process(collector)
+        finally:
+            stop_trial_process(workload)
 
 
 # 对三类负载各做多组交替配对试验，汇总中位数、上界和通过结论。
@@ -257,7 +284,7 @@ def markdown(report: dict[str, Any]) -> str:
 
 
 # 入口：解析参数、跑评测、写 JSON 和 Markdown 报告。
-def main() -> int:
+def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--profile", choices=tuple(PROFILE_DEFAULTS), default="representative")
@@ -329,6 +356,20 @@ def main() -> int:
             os.chown(path, owner.pw_uid, owner.pw_gid)
     print(markdown(report))
     return 0 if report["pass"] else 1
+
+
+def main() -> int:
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGTERM, interrupted)
+    try:
+        return _main()
+    except KeyboardInterrupt:
+        print("performance evaluation interrupted; child processes have been cleaned up", file=sys.stderr)
+        return 130
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 if __name__ == "__main__":

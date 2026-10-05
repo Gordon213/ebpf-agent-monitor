@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import copy
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import queue
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -421,23 +424,93 @@ def generate_certificate(directory: Path) -> tuple[Path, Path]:
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        timeout=10,
     )
     if completed.returncode:
         raise RuntimeError("failed to generate temporary TLS certificate")
     return certificate, private_key
 
 
+def prepare_review_workspace(
+    config: dict[str, Any], directory: Path
+) -> tuple[dict[str, Any], Path, dict[str, str]]:
+    """Keep review fixtures private to this run, regardless of previous owners."""
+    import yaml
+
+    paths = {
+        "/tmp/ebpf-agent-workspace": str(directory / "workspace"),
+        "/tmp/ebpf-agent-handoff": str(directory / "handoff"),
+        "/tmp/ebpf-agent-protected": str(directory / "protected"),
+    }
+
+    def remap(value: str) -> str:
+        for old, new in paths.items():
+            if value == old or value.startswith(old + "/"):
+                return new + value[len(old):]
+        return value
+
+    runtime_config = copy.deepcopy(config)
+    expected = runtime_config.get("expected") or {}
+    if "paths" in expected:
+        expected["paths"] = [remap(str(path)) for path in expected["paths"]]
+    rules_path = root_path(config.get("analyzer_config", "config/rules.yaml"))
+    rules = yaml.safe_load(rules_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(rules, dict):
+        raise ValueError("analyzer configuration root must be a mapping")
+    for agent in (rules.get("agents") or {}).values():
+        if agent.get("workspace"):
+            agent["workspace"] = remap(str(agent["workspace"]))
+    rules["sensitive_paths"] = [remap(str(path)) for path in rules.get("sensitive_paths") or []]
+    multi_agent = rules.get("multi_agent") or {}
+    if "shared_paths" in multi_agent:
+        multi_agent["shared_paths"] = [remap(str(path)) for path in multi_agent["shared_paths"]]
+    analyzer_config = directory / "rules.yaml"
+    analyzer_config.write_text(yaml.safe_dump(rules, allow_unicode=True), encoding="utf-8")
+    protected = Path(paths["/tmp/ebpf-agent-protected"]) / "review-secret.txt"
+    protected.parent.mkdir(parents=True, exist_ok=True)
+    protected.write_text("harmless review decoy\n", encoding="utf-8")
+    paths["protected_file"] = str(protected)
+    return runtime_config, analyzer_config, paths
+
+
+def stop_review_process(process: subprocess.Popen, timeout: float = 3) -> None:
+    """Terminate, reap and close a child on success, failure or interruption."""
+    if process.poll() is None:
+        try:
+            process.send_signal(signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=3)
+    for stream in (process.stdin, process.stdout, process.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+
+
+def read_startup(process: subprocess.Popen, timeout: float = 10) -> str:
+    """Read a startup line without leaving a failed child waiting forever."""
+    assert process.stdout is not None
+    result: queue.Queue[str] = queue.Queue()
+    threading.Thread(target=lambda: result.put(process.stdout.readline()), daemon=True).start()
+    try:
+        return result.get(timeout=timeout)
+    except queue.Empty as error:
+        raise TimeoutError("review subprocess did not report startup") from error
+
+
 # 跑一次 live 演示：起 HTTPS 服务、双 Agent、采集器和分析器，收集事件与告警。
 def run_live(config: dict[str, Any]) -> dict[str, Any]:
     runtime = float((config.get("runtime") or {}).get("seconds", 9))
-    analyzer_config = root_path(config.get("analyzer_config", "config/rules.yaml"))
     agents_config = config.get("agents") or []
     if len(agents_config) < 2:
         raise ValueError("live review demos require at least two configured Agents")
 
-    protected = Path("/tmp/ebpf-agent-protected/review-secret.txt")
-    protected.parent.mkdir(parents=True, exist_ok=True)
-    protected.write_text("harmless review decoy\n", encoding="utf-8")
     source_before = file_digest(AGENT_WORKLOAD)
     processes: list[subprocess.Popen[str]] = []
     agents: list[tuple[dict[str, Any], subprocess.Popen[str], str]] = []
@@ -445,6 +518,7 @@ def run_live(config: dict[str, Any]) -> dict[str, Any]:
     forwarding_errors: list[str] = []
 
     with tempfile.TemporaryDirectory(prefix="agent-monitor-review-") as temp_directory:
+        config, analyzer_config, runtime_paths = prepare_review_workspace(config, Path(temp_directory))
         certificate, private_key = generate_certificate(Path(temp_directory))
         port = reserve_port()
         server = subprocess.Popen(
@@ -468,13 +542,11 @@ def run_live(config: dict[str, Any]) -> dict[str, Any]:
             bufsize=1,
         )
         processes.append(server)
-        assert server.stdout is not None
-        server_ready = server.stdout.readline().strip()
-        if not server_ready.startswith("TLS SERVER READY"):
-            server_error = server.stderr.read() if server.stderr else ""
-            raise RuntimeError(f"TLS server failed to start: {server_ready} {server_error}")
-
         try:
+            assert server.stdout is not None
+            server_ready = read_startup(server).strip()
+            if not server_ready.startswith("TLS SERVER READY"):
+                raise RuntimeError(f"TLS server failed to start: {server_ready}")
             for agent_config in agents_config:
                 command = [
                     sys.executable,
@@ -492,6 +564,12 @@ def run_live(config: dict[str, Any]) -> dict[str, Any]:
                     str(agent_config.get("start_delay", 2.0)),
                     "--loop-count",
                     str(agent_config.get("loop_count", 1)),
+                    "--workspace-root",
+                    runtime_paths["/tmp/ebpf-agent-workspace"],
+                    "--handoff-root",
+                    runtime_paths["/tmp/ebpf-agent-handoff"],
+                    "--protected-file",
+                    runtime_paths["protected_file"],
                 ]
                 process = subprocess.Popen(
                     command,
@@ -503,7 +581,7 @@ def run_live(config: dict[str, Any]) -> dict[str, Any]:
                 )
                 processes.append(process)
                 assert process.stdout is not None
-                ready_line = process.stdout.readline()
+                ready_line = read_startup(process)
                 if not ready_line.startswith("REVIEW AGENT"):
                     raise RuntimeError(f"Agent {agent_config['id']} failed to become ready")
                 agents.append((agent_config, process, ready_line))
@@ -604,6 +682,7 @@ def run_live(config: dict[str, Any]) -> dict[str, Any]:
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "config": config["_path"],
                 "environment": {"kernel": os.uname().release, "machine": os.uname().machine},
+                "runtime_paths": runtime_paths,
                 "pass": all(item["pass"] for item in checks),
                 "checks": checks,
                 "event_counts_description": "汇总本次从内核和 OpenSSL 探针实际收到的各类事件数量。",
@@ -622,11 +701,9 @@ def run_live(config: dict[str, Any]) -> dict[str, Any]:
                 "server_stdout": (server_ready + "\n" + server_stdout)[-2000:],
                 "server_stderr": server_stderr[-2000:],
             }
-        except Exception:
+        finally:
             for process in reversed(processes):
-                if process.poll() is None:
-                    process.kill()
-            raise
+                stop_review_process(process)
 
 
 # 以 root 调起性能评测器，把它的结论复核成评审检查项。
@@ -655,13 +732,13 @@ def run_performance(config: dict[str, Any]) -> dict[str, Any]:
     for key, option in optional_arguments.items():
         if key in settings:
             command.extend([option, str(settings[key])])
-    completed = subprocess.run(
-        command,
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=int(settings.get("timeout_seconds", 300)),
+    process = subprocess.Popen(
+        command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
+    try:
+        stdout, stderr = process.communicate(timeout=int(settings.get("timeout_seconds", 300)))
+    finally:
+        stop_review_process(process)
     raw_report_path = output_directory / "performance_report.json"
     raw_report = (
         json.loads(raw_report_path.read_text(encoding="utf-8"))
@@ -672,8 +749,8 @@ def run_performance(config: dict[str, Any]) -> dict[str, Any]:
     add_check(
         checks,
         "性能评测器正常完成",
-        completed.returncode == 0,
-        {"returncode": completed.returncode, "stderr": completed.stderr[-2000:]},
+        process.returncode == 0,
+        {"returncode": process.returncode, "stderr": stderr[-2000:]},
     )
     for name, scenario in (raw_report.get("scenarios") or {}).items():
         pairs = scenario.get("pairs") or []
@@ -716,9 +793,9 @@ def run_performance(config: dict[str, Any]) -> dict[str, Any]:
         "performance_description": "保存文件、进程和网络三类负载的逐组基线/监控样本及统计结论。",
         "performance": raw_report,
         "stdout_description": "性能评测器的标准输出，用于复核报告生成位置和整体结论。",
-        "stdout": completed.stdout[-10000:],
+        "stdout": stdout[-10000:],
         "stderr_description": "性能评测器的错误输出；正常完成时通常为空。",
-        "stderr": completed.stderr[-3000:],
+        "stderr": stderr[-3000:],
     }
 
 
@@ -774,7 +851,7 @@ def print_report(config: dict[str, Any], report: dict[str, Any], path: Path) -> 
 
 
 # 入口：加载配置、确保构建与 sudo，逐个跑演示并写报告。
-def main() -> int:
+def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, action="append")
     parser.add_argument("--all", action="store_true", help="run every review demo config")
@@ -822,6 +899,20 @@ def main() -> int:
         print_report(config, report, path)
         overall = overall and bool(report.get("pass"))
     return 0 if overall else 1
+
+
+def main() -> int:
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGTERM, interrupted)
+    try:
+        return _main()
+    except KeyboardInterrupt:
+        print("review interrupted; child processes have been cleaned up", file=sys.stderr)
+        return 130
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 if __name__ == "__main__":
