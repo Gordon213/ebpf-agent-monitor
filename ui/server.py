@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import webbrowser
 
@@ -24,6 +26,78 @@ REVIEWS = {
     "review-3": REPORT_DIR / "review-3-performance.json",
 }
 PERFORMANCE = REPORT_DIR / "performance" / "performance_report.json"
+LIVE_HINT = "sudo -v && python3 ui/server.py"
+
+
+class LiveError(RuntimeError):
+    """A live-run failure that may carry a fix-it hint for the console."""
+
+    def __init__(self, message: str, hint: str = "") -> None:
+        super().__init__(message)
+        self.hint = hint
+
+
+def live_status() -> dict:
+    """Report whether a live run can start right now."""
+
+    if not (ROOT / "build" / "agent-monitor").is_file():
+        return {"available": False, "reason": "采集器还没有编译，先运行 make"}
+    try:
+        completed = subprocess.run(
+            ["sudo", "-n", "true"],
+            cwd=ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {"available": False, "reason": f"无法调用 sudo，请在终端执行：{LIVE_HINT}"}
+    if completed.returncode:
+        return {"available": False, "reason": "需要先在终端授权 sudo"}
+    return {"available": True, "reason": ""}
+
+
+def run_live_scenario(name: str) -> dict:
+    """Run the real eBPF capture pipeline for one trigger and return its timeline."""
+
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(ROOT)
+    try:
+        completed = subprocess.run(
+            [
+                "sudo",
+                "-n",
+                sys.executable,
+                "-m",
+                "ui.live.driver",
+                "--scenario",
+                name,
+            ],
+            cwd=ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("实时采集超时，请重试") from error
+    if completed.returncode == 0:
+        try:
+            return json.loads(completed.stdout.strip().splitlines()[-1])
+        except (json.JSONDecodeError, IndexError) as error:
+            raise RuntimeError("实时采集返回了无法解析的结果") from error
+    message = ""
+    for line in reversed(completed.stdout.strip().splitlines()):
+        try:
+            document = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message = str(document.get("error") or "")
+        if message:
+            break
+    if not message and "sudo" in (completed.stderr or ""):
+        raise LiveError("sudo 授权已过期", LIVE_HINT)
+    raise LiveError(message or completed.stderr.strip() or "实时采集失败")
 
 
 def load_json(path: Path) -> dict | None:
@@ -117,6 +191,20 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if length:
             self.rfile.read(length)
         path = self.path.split("?", 1)[0]
+        live_prefix = "/api/live/scenarios/"
+        if path.startswith(live_prefix):
+            name = path[len(live_prefix) :]
+            try:
+                payload = run_live_scenario(name)
+            except KeyError:
+                self._json(404, {"error": f"unknown scenario: {name}"})
+            except LiveError as error:
+                self._json(500, {"error": str(error), "hint": error.hint})
+            except (OSError, RuntimeError, ValueError) as error:
+                self._json(500, {"error": str(error)})
+            else:
+                self._json(200, payload)
+            return
         prefix = "/api/scenarios/"
         if not path.startswith(prefix):
             self.send_error(404)
@@ -134,6 +222,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
+        if path == "/api/live/status":
+            self._json(200, live_status())
+            return
         if path == "/api/scenarios":
             self._json(200, {"scenarios": catalog()})
             return
@@ -170,3 +261,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# sudo -v && python3 ui/server.py

@@ -93,10 +93,11 @@ make demo-review-all
 
 ## 如何监测
 
-监测台有一页可以点按钮触发异常。每个按钮对应一条检测规则。点击后，监测台按这种异常生成进程、文件或网络事件，交给 `config/rules.yaml` 和 `user/analyzer.py` 当场判定。总览、事件流和性能页仍然读取 `docs/review_reports/` 里最近一次评审结果。先启动界面：
+监测台可以点按钮触发异常，默认使用「实时 eBPF 采集」模式：启动实际 Agent 进程和本地 HTTPS 服务，执行对应操作，把采集器真正收到的事件交给 `config/rules.yaml` 和 `user/analyzer.py` 判定。也可以切换到「离线事件」，直接重放生成的事件。总览、事件流和性能页仍然读取 `docs/review_reports/` 里最近一次评审结果。先编译采集器并授权 sudo，再启动界面：
 
 ```bash
-python3 ui/server.py
+make
+sudo -v && python3 ui/server.py
 ```
 
 等价命令是 `make ui`。浏览器打开 http://127.0.0.1:8765/ 。首页是「触发异常」。点下一个按钮后，结果区会按时间展开完整流程：
@@ -112,8 +113,16 @@ python3 ui/server.py
 - **事件流**：进程、文件、网络、HTTPS 的数量和脱敏样例；
 - **性能**：文件、进程、网络相对 5% 门槛的采集开销。
 
-再次执行 `make demo-review-all` 之后刷新页面，评审页会换成新报告。按钮触发
-的异常只经过规则引擎，不会加载 eBPF。
+再次执行 `make demo-review-all` 之后刷新页面，评审页会换成新报告。实时模式的
+事件统计来自采集器输出，支持 ARM64 的 `unlinkat` 删除事件；时间线会把同一个
+操作触发的多条告警一起标红。离线模式只经过规则引擎，不加载 eBPF。
+
+在线模块的普通回归测试包含在 `make test` 和 `make check` 中。运行真实 eBPF
+集成测试（11 个按钮场景，检查告警、因果链、时间线和进程清理）：
+
+```bash
+make test-live
+```
 
 要监测自己的 Agent，先编译，再用 root 把根进程 PID 交给采集器。子进程会继承
 同一个 `agent_id`。`--json` 把事件打到标准输出，分析器据此写告警和关联：
@@ -132,9 +141,14 @@ sudo ./build/agent-monitor --agent 1:PID --agent 2:PID --json \
 review 1 和 review 2 会从两个根 Agent 的 `/proc/PID/maps` 或系统标准路径定位
 `libssl.so.3`，并自动挂载四组 OpenSSL 探针，全程无需手工填写 PID 或库路径。
 
-明文按最多 256 字节的内核事件分片传输，用户态使用有界缓冲重组，因此不会
-因为大请求扩大普通系统调用事件。当前探针适用于动态链接 OpenSSL；静态链接、
-BoringSSL、rustls、应用层再次加密或 HTTP/3 需要相应库的独立探针。
+每次 OpenSSL 调用最多采集 256 字节，超过上限的调用会标记截断。在线演示按
+该上限分段读写，分析器先按字节重组完整消息，再解码 UTF-8，支持中文和 emoji
+跨事件分片。HTTP Content-Length 同样按正文的 UTF-8 字节长度计算。
+
+JSONL 中的 `payload_encoding: latin-1` 表示逐字节封装；分析器还兼容旧采集器
+的无标记字节输出，以及离线场景中已解码的 Unicode 文本。当前探针适用于动态
+链接 OpenSSL；静态链接、BoringSSL、rustls、应用层再次加密或 HTTP/3 需要相应库
+的独立探针。
 
 ## 配置要点
 

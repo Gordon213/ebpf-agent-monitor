@@ -107,16 +107,16 @@
     .pill.crit { background: var(--crit-bg); color: var(--crit); }
     .pipeline {
       display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+      gap: 12px;
       margin: 18px 0 22px;
     }
     .step {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 10px;
-      padding: 12px;
-      min-height: 92px;
+      padding: 14px;
+      min-height: 104px;
     }
     .step strong { display: block; margin-bottom: 6px; font-size: 13px; }
     .step span { color: var(--muted); font-size: 12px; line-height: 1.4; }
@@ -193,19 +193,21 @@
     .scenario.selected { border-color: var(--accent); background: var(--accent-soft); }
     .scenario:disabled { opacity: 0.6; cursor: wait; }
     .timeline { margin: 8px 0 18px; }
-    .step { display: grid; grid-template-columns: 72px 18px 1fr; gap: 10px; }
-    .step .when { color: var(--muted); font-size: 12px; padding-top: 12px; font-variant-numeric: tabular-nums; }
+    .tl-step { display: grid; grid-template-columns: 72px 18px minmax(0, 1fr); gap: 10px; }
+    .tl-step .when { color: var(--muted); font-size: 12px; padding-top: 12px; font-variant-numeric: tabular-nums; }
     .rail { position: relative; }
     .rail::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 0; width: 2px; background: var(--line); }
     .rail::after { content: ""; position: absolute; left: 3px; top: 16px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
-    .step.fired .rail::after { background: var(--crit); }
-    .step .body { background: #faf7f1; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+    .tl-step.fired .rail::after { background: var(--crit); }
+    .tl-step .body { background: #faf7f1; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+    .tl-step .body strong { font-size: 13px; }
     .verdict { border: 1px solid #e7c7c4; background: var(--crit-bg); border-radius: 12px; padding: 14px; }
     .error { color: var(--crit); }
     @media (max-width: 980px) {
       .app { grid-template-columns: 1fr; }
       .nav { border-right: 0; border-bottom: 1px solid var(--line); }
-      .cards, .pipeline, .chain, .bar-row, .alert-list, .scenarios { grid-template-columns: 1fr; }
+      .cards, .chain, .bar-row, .alert-list, .scenarios { grid-template-columns: 1fr; }
+      .tl-step { grid-template-columns: 56px 18px minmax(0, 1fr); }
       .chain .arrow { transform: rotate(90deg); height: 20px; }
       main { padding: 20px 16px 48px; }
     }
@@ -216,11 +218,11 @@
     <aside class="nav">
       <p class="mark">Agent<span>Scope</span></p>
       <p>eBPF 内核采集，用户态把 Prompt 和系统调用串成证据。</p>
-      <button type="button" class="active" data-view="trigger">触发异常</button>
       <button type="button" data-view="overview">总览</button>
       <button type="button" data-view="alerts">告警因果</button>
       <button type="button" data-view="events">事件流</button>
       <button type="button" data-view="performance">性能</button>
+      <button type="button" class="active" data-view="trigger">触发异常</button>
     </aside>
     <main>
       <section id="trigger" class="view active"></section>
@@ -258,6 +260,94 @@
     let scenarioResult = null;
     let scenarioBusy = false;
     let scenarioError = "";
+    let liveStatus = { available: false, reason: "" };
+    let mode = "live";
+
+    function currentSource() {
+      return (scenarioResult && scenarioResult.source) || "offline";
+    }
+
+    function eventBadges() {
+      const counts = scenarioResult && scenarioResult.events;
+      const totals = {};
+      if (Array.isArray(counts)) {
+        counts.forEach((item) => { totals[item.type] = (totals[item.type] || 0) + (Number(item.count) || 1); });
+      } else if (counts && typeof counts === "object") {
+        Object.entries(counts).forEach(([type, count]) => { totals[type] = Number(count) || 0; });
+      }
+      const names = Object.keys(totals);
+      if (!names.length) return "";
+      const badges = names.map((type) => `${esc(TYPE_LABEL[type] || type)} ${esc(totals[type])}`).join(" · ");
+      return `<p class="meta">本次采集到的事件：${badges}</p>`;
+    }
+
+    function formatElapsed(milliseconds) {
+      const value = Math.max(0, Number(milliseconds) || 0);
+      return value >= 1000 ? `${(value / 1000).toFixed(2)} s` : `${Math.round(value)} ms`;
+    }
+
+    function formatEventTime(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString("zh-CN", {
+        timeZone: "Asia/Shanghai", hour12: false,
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit"
+      }) + "." + String(date.getMilliseconds()).padStart(3, "0");
+    }
+
+    function renderResult() {
+      if (scenarioError) return `<p class="error">${esc(scenarioError)}</p>`;
+      if (!scenarioResult) return `<p class="meta">选择一种异常，点一下就会开始。</p>`;
+      const live = currentSource() === "live";
+      const steps = (scenarioResult.steps || []).map((step) => {
+        const fired = (step.triggered || []).length > 0;
+        const when = step.count > 1
+          ? `+${formatElapsed(step.offset_ms)}–${formatElapsed(step.end_offset_ms)}`
+          : `+${formatElapsed(step.offset_ms)}`;
+        const occurred = step.time
+          ? `<div class="meta">北京时间 ${esc(formatEventTime(step.time))}${step.count > 1 && step.end_time ? ` 至 ${esc(formatEventTime(step.end_time))}` : ""}</div>`
+          : "";
+        const badge = fired ? `<div class="meta">此步触发：${esc((step.triggered || []).map((type) => ANOMALY_LABEL[type] || type).join("、"))}</div>` : "";
+        return `<div class="tl-step ${fired ? "fired" : ""}">
+          <div class="when">${esc(when)}</div>
+          <div class="rail"></div>
+          <div class="body">
+            <strong>${esc(step.title)}</strong>
+            ${occurred}
+            ${step.detail ? `<div class="mono" style="margin-top:4px">${esc(step.detail)}</div>` : ""}
+            ${badge}
+          </div>
+        </div>`;
+      }).join("");
+      const alerts = (scenarioResult.alerts || []).map((alert) => `<div style="margin-top:14px">
+        ${severityPill(alert.severity)} <strong>${esc(ANOMALY_LABEL[alert.anomaly_type] || alert.anomaly_type)}</strong>
+        <p class="meta">${esc(alert.rule || "")}</p>
+        ${chainMarkup(alert)}
+      </div>`).join("");
+      const verdict = (scenarioResult.alerts || []).length
+        ? `<div class="verdict"><strong>最终结果：经过 ${esc(formatElapsed(scenarioResult.duration_ms))}，判定告警 ${esc((scenarioResult.alerts || []).length)} 条</strong>${alerts}</div>`
+        : `<div class="verdict"><strong>最终结果：没有告警</strong><p class="meta">这组事件没有越过 config/rules.yaml 里的阈值。</p></div>`;
+      const source = live
+        ? `<span class="pill ok">实时 eBPF 采集</span>`
+        : `<span class="pill high">离线事件</span>`;
+      return `<h2 id="scenario-flow">${esc(scenarioResult.title)}</h2>
+        <p class="lede">${source} ${esc(scenarioResult.summary)} 以下展示实际经过的 ${esc(formatElapsed(scenarioResult.duration_ms))}，标红的圆点是规则被触发的那一步。</p>
+        <div class="timeline">${steps}</div>
+        ${eventBadges()}
+        ${verdict}`;
+    }
+
+    function refreshLiveStatus() {
+      fetch("/api/live/status").then((response) => response.json()).then((payload) => {
+        liveStatus = payload || { available: false, reason: "无法读取实时采集状态" };
+        renderTrigger();
+      }).catch(() => {
+        liveStatus = { available: false, reason: "无法读取实时采集状态" };
+        renderTrigger();
+      });
+    }
 
     function esc(value) {
       return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -282,7 +372,7 @@
         <article>
           <h3>Prompt</h3>
           <div class="mono">${esc(alert.causal_prompt || "没有关联到 Prompt")}</div>
-          <p class="meta">${esc(alert.agent_name)} · ${esc(alert.time || "")}</p>
+          <p class="meta">${esc(alert.agent_name)} · ${esc(formatEventTime(alert.time))}</p>
         </article>
         <div class="arrow">→</div>
         <article>
@@ -305,41 +395,27 @@
         <strong>${esc(item.title)}</strong>
         <span class="meta">${esc(item.summary)}</span>
       </button>`).join("");
-      let result = `<p class="meta">选择一种异常。页面会生成对应的系统事件，交给 <span class="mono">config/rules.yaml</span> 里的规则引擎，再把命中的告警显示在下面。</p>`;
-      if (scenarioError) result = `<p class="error">${esc(scenarioError)}</p>`;
-      if (scenarioResult) {
-        const steps = (scenarioResult.steps || []).map((step) => {
-          const fired = (step.triggered || []).length > 0;
-          const when = step.count > 1 ? `+${step.offset_ms}–${step.end_offset_ms} ms` : `+${step.offset_ms} ms`;
-          const badge = fired ? `<div class="meta">此步触发：${esc((step.triggered || []).map((type) => ANOMALY_LABEL[type] || type).join("、"))}</div>` : "";
-          return `<div class="step ${fired ? "fired" : ""}">
-            <div class="when">${esc(when)}</div>
-            <div class="rail"></div>
-            <div class="body">
-              <strong>${esc(step.title)}</strong>
-              <div class="mono" style="margin-top:4px">${esc(step.detail)}</div>
-              ${badge}
-            </div>
-          </div>`;
-        }).join("");
-        const alerts = (scenarioResult.alerts || []).map((alert) => `<div style="margin-top:14px">
-          ${severityPill(alert.severity)} <strong>${esc(ANOMALY_LABEL[alert.anomaly_type] || alert.anomaly_type)}</strong>
-          <p class="meta">${esc(alert.rule || "")}</p>
-          ${chainMarkup(alert)}
-        </div>`).join("");
-        const verdict = alerts
-          ? `<div class="verdict"><strong>最终结果：+${esc(scenarioResult.duration_ms)} ms 判定告警 ${esc((scenarioResult.alerts || []).length)} 条</strong>${alerts}</div>`
-          : `<div class="verdict"><strong>最终结果：没有告警</strong><p class="meta">这组事件没有越过 config/rules.yaml 里的阈值。</p></div>`;
-        result = `<h2 id="scenario-flow">${esc(scenarioResult.title)}</h2>
-          <p class="lede">${esc(scenarioResult.summary)} 下面从 +0 ms 看到 +${esc(scenarioResult.duration_ms)} ms，标红的圆点是规则被触发的那一步。</p>
-          <div class="timeline">${steps}</div>
-          ${verdict}`;
-      }
+      const live = mode === "live";
+      const toggle = `<div class="row" style="margin:0 0 14px">
+        <button type="button" class="ghost ${live ? "active" : ""}" data-mode="live">实时 eBPF 采集</button>
+        <button type="button" class="ghost ${live ? "" : "active"}" data-mode="offline">离线事件</button>
+      </div>`;
+      const banner = live && !liveStatus.available
+        ? `<div class="verdict" style="margin-bottom:14px"><strong>实时采集未就绪</strong>
+            <p class="meta">${esc(liveStatus.reason || "需要先在终端授权 sudo")}</p>
+            <p class="meta mono">${esc("sudo -v && python3 ui/server.py")}</p></div>`
+        : "";
+      const hint = live
+        ? `点一下按钮，监测台会真的启动双 Agent、采集器、本地 HTTPS 和分析器：你看到的时间线就是内核与 OpenSSL 探针实际采到的系统调用。`
+        : `每个按钮对应一条检测规则。离线模式按演示节奏逐步生成事件，记录当前系统时间，交给分析器判定，不加载 eBPF。`;
+      const busy = scenarioBusy ? `<p class="meta">${live ? "正在采集真实事件并等待规则判定…" : "正在按演示节奏生成事件并检测…"}</p>` : "";
       document.getElementById("trigger").innerHTML = `
         <h1>点一下，触发一种异常</h1>
-        <p class="lede">每个按钮对应一条检测规则。点击后，监测台按这种异常生成进程、文件或网络事件，交给分析器当场判定。</p>
+        ${toggle}
+        <p class="lede">${esc(hint)}</p>
+        ${banner}
         <div class="scenarios">${buttons || "<p class='meta'>规则列表还没有加载。</p>"}</div>
-        <div class="panel" style="padding:16px">${scenarioBusy ? "<p class='meta'>正在检测…</p>" : result}</div>`;
+        <div class="panel" style="padding:16px">${busy}${renderResult()}</div>`;
     }
 
     function triggerScenario(name) {
@@ -347,16 +423,25 @@
       activeScenario = name;
       scenarioBusy = true;
       scenarioError = "";
+      scenarioResult = null;
       renderTrigger();
-      fetch("/api/scenarios/" + encodeURIComponent(name), { method: "POST" })
+      const live = mode === "live";
+      const endpoint = live ? "/api/live/scenarios/" : "/api/scenarios/";
+      fetch(endpoint + encodeURIComponent(name), { method: "POST" })
         .then((response) => response.json().then((payload) => ({ ok: response.ok, payload })))
         .then(({ ok, payload }) => {
-          if (!ok) throw new Error(payload.error || "检测失败");
+          if (!ok) {
+            const message = payload.error || (live ? "实时采集失败" : "检测失败");
+            throw new Error(payload.hint ? `${message}，请在终端重新执行：${payload.hint}` : message);
+          }
+          payload.source = live ? "live" : "offline";
           scenarioResult = payload;
+          if (live) liveStatus = { available: true, reason: "" };
         })
         .catch((error) => {
           scenarioResult = null;
           scenarioError = error.message || String(error);
+          if (live) refreshLiveStatus();
         })
         .finally(() => {
           scenarioBusy = false;
@@ -511,10 +596,19 @@
         renderAlerts();
         return;
       }
+      const modeButton = event.target.closest("[data-mode]");
+      if (modeButton) {
+        mode = modeButton.dataset.mode;
+        scenarioError = "";
+        renderTrigger();
+        if (mode === "live") refreshLiveStatus();
+        return;
+      }
       const scenario = event.target.closest("[data-scenario]");
       if (scenario) triggerScenario(scenario.dataset.scenario);
     });
 
+    refreshLiveStatus();
     fetch("/api/scenarios").then((response) => response.json()).then((payload) => {
       scenarios = payload.scenarios || [];
       if (!scenarioBusy) renderTrigger();

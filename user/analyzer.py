@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 from collections import Counter, defaultdict, deque
 from datetime import datetime
 import fnmatch
@@ -142,7 +143,7 @@ class SemanticExtractor:
     def __init__(self, max_buffer_bytes: int = 262_144, max_text_chars: int = 4096):
         self.max_buffer_bytes = max_buffer_bytes
         self.max_text_chars = max_text_chars
-        self.buffers: dict[tuple[int, int, str], str] = {}
+        self.buffers: dict[tuple[int, int, str], bytes] = {}
 
     @staticmethod
     def _json_documents(text: str) -> tuple[list[Any], str]:
@@ -203,22 +204,45 @@ class SemanticExtractor:
         return unique
 
     @staticmethod
-    def _http_bodies(buffer: str) -> tuple[list[str], str]:
-        bodies: list[str] = []
+    def _payload_bytes(event: dict[str, Any]) -> bytes:
+        payload = str(event.get("payload") or "")
+        encoding = event.get("payload_encoding")
+        # Older collectors used the same byte envelope without an encoding label.
+        legacy_bytes = (
+            encoding is None
+            and "data_size" in event
+            and event.get("data_len") == len(payload)
+        )
+        if encoding == "latin-1" or legacy_bytes:
+            try:
+                return payload.encode("latin-1")
+            except UnicodeEncodeError:
+                pass
+        # Synthetic/replayed inputs may already contain decoded Unicode text.
+        return payload.encode("utf-8")
+
+    @staticmethod
+    def _is_http(buffer: bytes) -> bool:
+        prefixes = (b"GET ", b"POST ", b"PUT ", b"PATCH ", b"DELETE ", b"HTTP/")
+        return any(buffer.startswith(prefix) or prefix.startswith(buffer) for prefix in prefixes)
+
+    @staticmethod
+    def _http_bodies(buffer: bytes) -> tuple[list[bytes], bytes]:
+        bodies: list[bytes] = []
         remaining = buffer
         while True:
-            header_end = remaining.find("\r\n\r\n")
+            header_end = remaining.find(b"\r\n\r\n")
             if header_end < 0:
                 break
-            first_line = remaining.split("\r\n", 1)[0]
+            first_line = remaining.split(b"\r\n", 1)[0]
             if not (
-                first_line.startswith(("GET ", "POST ", "PUT ", "PATCH ", "DELETE "))
-                or first_line.startswith("HTTP/")
+                first_line.startswith((b"GET ", b"POST ", b"PUT ", b"PATCH ", b"DELETE "))
+                or first_line.startswith(b"HTTP/")
             ):
                 remaining = remaining[header_end + 4 :]
                 continue
             headers = remaining[:header_end]
-            length_match = re.search(r"(?im)^content-length:\s*(\d+)\s*$", headers)
+            length_match = re.search(rb"(?im)^content-length:\s*(\d+)\s*$", headers)
             if not length_match:
                 break
             body_length = int(length_match.group(1))
@@ -232,24 +256,36 @@ class SemanticExtractor:
     def feed(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         if event.get("type") not in TLS_EVENTS:
             return []
-        payload = str(event.get("payload") or "")
+        payload = self._payload_bytes(event)
         if not payload:
             return []
 
         direction = "prompt" if event.get("type") == "tls_write" else "response"
         key = (int(event.get("agent_id") or 0), int(event.get("tgid") or 0), direction)
-        buffer = (self.buffers.get(key, "") + payload)[-self.max_buffer_bytes :]
+        buffer = (self.buffers.get(key, b"") + payload)[-self.max_buffer_bytes :]
         bodies, remaining = self._http_bodies(buffer)
         semantics: list[dict[str, Any]] = []
         seen: set[str] = set()
 
         if bodies:
-            document_sets = [self._json_documents(candidate)[0] for candidate in bodies]
+            document_sets = [
+                self._json_documents(candidate.decode("utf-8", errors="replace"))[0]
+                for candidate in bodies
+            ]
+            self.buffers[key] = remaining
+        elif self._is_http(buffer):
+            # Content-Length counts bytes; do not parse a JSON prefix of an
+            # incomplete HTTP body even when that prefix happens to be valid.
+            document_sets = []
             self.buffers[key] = remaining
         else:
-            documents, json_remainder = self._json_documents(buffer)
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            decoded = decoder.decode(buffer, final=False)
+            pending_bytes, _ = decoder.getstate()
+            documents, json_remainder = self._json_documents(decoded)
             document_sets = [documents]
-            self.buffers[key] = json_remainder
+            # Keep any incomplete UTF-8 code point for the next captured chunk.
+            self.buffers[key] = json_remainder.encode("utf-8") + pending_bytes
 
         for documents in document_sets:
             for document in documents:

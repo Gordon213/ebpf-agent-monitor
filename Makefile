@@ -23,7 +23,7 @@ BPF_CFLAGS := -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) -Wall -Werror \
 USER_CFLAGS := -g -O2 -Wall -Wextra -Werror -I$(BUILD_DIR) -I$(SRC_DIR) \
 	$(LIBBPF_CFLAGS)
 
-.PHONY: all clean doctor test check demo-review-1 demo-review-2 \
+.PHONY: all clean doctor test test-live check demo-review-1 demo-review-2 \
 	demo-review-3 demo-review-all ui
 
 all: $(BUILD_DIR)/agent-monitor
@@ -56,6 +56,9 @@ doctor:
 test:
 	mkdir -p $(BUILD_DIR)/pycache
 	PYTHONPYCACHEPREFIX=$(BUILD_DIR)/pycache $(PYTHON) -m unittest discover -s tests -v
+
+test-live: all
+	sudo env AGENT_MONITOR_LIVE_TESTS=1 PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m unittest discover -s tests -p 'test_live.py' -v
 
 check:
 	$(PYTHON) tools/acceptance_check.py

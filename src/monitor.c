@@ -88,6 +88,8 @@ static void format_time(__u64 monotonic_ns, char *buffer, size_t size)
                  (unsigned long long)((realtime_ns / 1000000ULL) % 1000));
 }
 
+/* Preserve binary bytes as JSON code points. TLS UTF-8 is decoded after
+ * reassembly in the analyzer, since one event can split a multibyte character. */
 static void json_bytes(const char *value, size_t value_length, char *output,
                        size_t output_size)
 {
@@ -177,7 +179,8 @@ static int handle_event(void *context, void *data, size_t data_size)
                "\"dirfd\":%d,\"flags\":%u,\"retval\":%lld,"
                "\"destination\":\"%s\",\"port\":%u,"
                "\"data_len\":%u,\"data_size\":%u,"
-               "\"truncated\":%s,\"payload\":\"%s\"}\n",
+               "\"truncated\":%s,\"payload_encoding\":\"latin-1\","
+               "\"payload\":\"%s\"}\n",
                timestamp, (unsigned long long)event->timestamp_ns,
                event_name(event->type), event->agent_id, event->tgid,
                event->tid, event->ppid, event->uid, event->gid,

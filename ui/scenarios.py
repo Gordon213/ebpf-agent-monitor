@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Any, Callable
 
 
@@ -22,12 +24,16 @@ ScenarioBuilder = Callable[["Clock"], list[dict[str, Any]]]
 
 
 class Clock:
-    def __init__(self) -> None:
-        self.ns = 10_000_000_000_000
+    """Pace the offline demonstration and record actual event times."""
 
-    def tick(self, milliseconds: int = 40) -> int:
-        self.ns += milliseconds * 1_000_000
-        return self.ns
+    def __init__(self) -> None:
+        self.started = False
+
+    def tick(self, delay_ms: int) -> int:
+        if self.started and delay_ms > 0:
+            time.sleep(delay_ms / 1000)
+        self.started = True
+        return time.monotonic_ns()
 
 
 def _event(
@@ -41,12 +47,16 @@ def _event(
     port: int = 0,
     flags: int = 0,
     payload: str = "",
-    milliseconds: int = 40,
+    delay_ms: int | None = None,
 ) -> dict[str, Any]:
-    timestamp_ns = clock.tick(milliseconds)
+    # The response gets a readable pause; ordinary actions follow at 120 ms.
+    # These are real waits, while the event content remains a scripted demo.
+    if delay_ms is None:
+        delay_ms = 800 if event_type == "tls_read" else 120
+    timestamp_ns = clock.tick(delay_ms)
     pid = 4100 + agent_id
     return {
-        "time": "2026-09-28T08:00:00.000Z",
+        "time": datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"),
         "timestamp_ns": timestamp_ns,
         "type": event_type,
         "agent_id": agent_id,
@@ -69,10 +79,11 @@ def _event(
 
 def _http(kind: str, document: dict[str, Any]) -> str:
     body = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
+    body_length = len(body.encode("utf-8"))
     if kind == "request":
-        head = f"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: {len(body)}\r\n\r\n"
+        head = f"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: {body_length}\r\n\r\n"
     else:
-        head = f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n\r\n"
+        head = f"HTTP/1.1 200 OK\r\nContent-Length: {body_length}\r\n\r\n"
     return head + body
 
 
@@ -122,7 +133,7 @@ def _loop(clock: Clock) -> list[dict[str, Any]]:
                 "openat",
                 object_name="/tmp/ebpf-agent-workspace/agent-1/review-loop.txt",
                 retval=3,
-                milliseconds=30,
+                delay_ms=150,
             )
         )
     for _ in range(5):
@@ -134,7 +145,7 @@ def _loop(clock: Clock) -> list[dict[str, Any]]:
                 destination="127.0.0.1",
                 port=9,
                 retval=-115,
-                milliseconds=30,
+                delay_ms=180,
             )
         )
     return events
@@ -143,7 +154,7 @@ def _loop(clock: Clock) -> list[dict[str, Any]]:
 def _process_storm(clock: Clock) -> list[dict[str, Any]]:
     events = _talk(clock, 1, "并行拉起一批辅助进程", "ACK:开始创建进程")
     events.extend(
-        _event(clock, 1, "exec", object_name="/usr/bin/true", retval=0, milliseconds=20)
+        _event(clock, 1, "exec", object_name="/usr/bin/true", retval=0, delay_ms=50)
         for _ in range(20)
     )
     return events
@@ -158,7 +169,7 @@ def _deletion_storm(clock: Clock) -> list[dict[str, Any]]:
             "unlinkat",
             object_name=f"/tmp/ebpf-agent-workspace/agent-1/part-{index}.txt",
             retval=0,
-            milliseconds=20,
+            delay_ms=80,
         )
         for index in range(10)
     )
@@ -206,11 +217,11 @@ def _storm(clock: Clock) -> list[dict[str, Any]]:
     ]
     for _ in range(5):
         events.append(
-            _event(clock, 1, "connect", destination="127.0.0.1", port=443, retval=0, milliseconds=20)
+            _event(clock, 1, "connect", destination="127.0.0.1", port=443, retval=0, delay_ms=100)
         )
     for _ in range(5):
         events.append(
-            _event(clock, 2, "connect", destination="127.0.0.1", port=443, retval=0, milliseconds=20)
+            _event(clock, 2, "connect", destination="127.0.0.1", port=443, retval=0, delay_ms=100)
         )
     return events
 
@@ -341,6 +352,8 @@ def _target(event: dict[str, Any]) -> str:
 
 def _public_event(event: dict[str, Any]) -> dict[str, Any]:
     return {
+        "time": event.get("time"),
+        "timestamp_ns": event.get("timestamp_ns"),
         "type": event.get("type"),
         "agent_id": event.get("agent_id"),
         "tgid": event.get("tgid"),
@@ -364,7 +377,7 @@ def _signature(event: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _offset_ms(event: dict[str, Any], origin: int) -> int:
-    return int(round((int(event["timestamp_ns"]) - origin) / 1_000_000))
+    return round((int(event["timestamp_ns"]) - origin) / 1_000_000)
 
 
 def _step_copy(group: list[dict[str, Any]], origin: int, triggered: list[str]) -> dict[str, Any]:
@@ -395,6 +408,8 @@ def _step_copy(group: list[dict[str, Any]], origin: int, triggered: list[str]) -
     return {
         "offset_ms": start,
         "end_offset_ms": end,
+        "time": first.get("time"),
+        "end_time": last.get("time"),
         "count": count,
         "agent_id": first.get("agent_id"),
         "agent_name": agent,
